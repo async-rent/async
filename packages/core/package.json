@@ -12,6 +12,7 @@
     "check": "vp check"
   },
   "dependencies": {
+    "effect": "catalog:",
     "uuid": "catalog:",
     "zod": "catalog:"
   },
