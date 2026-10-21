@@ -1,11 +1,24 @@
 {
   "version": 1,
   "skills": {
-    "effect-ts": {
-      "source": "Effect-TS/skills",
+    "agent-browser": {
+      "source": "vercel-labs/agent-browser",
       "sourceType": "github",
-      "skillPath": "skills/effect-ts/SKILL.md",
-      "computedHash": "cb225ba5dda169883dfee680fba6c570c89245ba19242a9bc5c3f2ac8218a55f"
+      "skillPath": "skills/agent-browser/SKILL.md",
+      "computedHash": "80161e6836b3b40f4e83730a290deb40ac14d877d38c97ad5f6d71be37ce74c3"
+    },
+    "react-start": {
+      "source": "TanStack/router",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "packages/react-start/skills/react-start/SKILL.md",
+      "computedHash": "2bdec68bf066fe3a9eef9670b1a0295e7c84cb686b4de04a22044958aea3180a"
+    },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "b864a958765563321f485a96f4d59c0bb6539f4286ab6d8b8b66895b7ebd302d"
     }
   }
 }

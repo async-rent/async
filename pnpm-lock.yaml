@@ -236,9 +236,6 @@ catalogs:
     cn:
       specifier: ^0.5.0
       version: 0.5.0
-    effect:
-      specifier: ^4.0.5
-      version: 4.0.5
     nitro:
       specifier: 3.0.260610-beta
       version: 3.0.260610-beta
@@ -396,9 +393,6 @@ importers:
 
   packages/core:
     dependencies:
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.5
       uuid:
         specifier: 'catalog:'
         version: 14.0.3
@@ -2853,9 +2847,6 @@ packages:
 
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
-
-  effect@4.0.5:
-    resolution: {integrity: sha512-BY4/28NlpOd99yzmV741xbVGmp+1U7tks4oB7F/Png64bTa5tm5eCA6W0RiXsnuLDDoJpjfVSo4Dnq4BZb/89Q==}
 
   electron-to-chromium@1.5.460:
     resolution: {integrity: sha512-rRaVC7bNUyGsL+GMtmZfv3AfgG6za7gE9v5bT0PIbjEerddA0IQ+tCK05NFAXqCpNlrxBZqbFqquyxHRQONHTA==}
@@ -6501,8 +6492,6 @@ snapshots:
       gopd: 1.2.0
 
   ee-first@1.1.1: {}
-
-  effect@4.0.5: {}
 
   electron-to-chromium@1.5.460: {}
 
