@@ -1,0 +1,23 @@
+{
+  "name": "@async-rent/api",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "start": "node .output/server/index.mjs"
+  },
+  "dependencies": {
+    "@async-rent/core": "workspace:*",
+    "@async-rent/db": "workspace:*",
+    "hono": "^4.13.13",
+    "nitro": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

@@ -1,0 +1,23 @@
+services:
+  - type: web
+    runtime: node
+    name: async-rent-storefront
+    rootDir: apps/storefront/
+    buildCommand: pnpm install && pnpm build
+    startCommand: pnpm start
+    envVars:
+      - key: NITRO_PRESET
+        value: render-com
+      - key: HOST
+        value: 0.0.0.0
+  - type: web
+    runtime: node
+    name: async-rent-api
+    rootDir: apps/api/
+    buildCommand: pnpm install && pnpm build
+    startCommand: pnpm start
+    envVars:
+      - key: NITRO_PRESET
+        value: render-com
+      - key: HOST
+        value: 0.0.0.0
