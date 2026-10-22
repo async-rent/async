@@ -1,11 +1,7 @@
-import { nitro } from "nitro/vite";
-import { defineConfig } from "vite-plus";
+import { cloudflare } from "@cloudflare/vite-plugin";
+
+import { defineConfig, lazyPlugins } from "vite-plus";
 
 export default defineConfig({
-  plugins: [
-    nitro({
-      serverEntry: "./src/index.ts",
-      noExternals: ["@async-rent/core", "@async-rent/db"],
-    }),
-  ],
+  plugins: lazyPlugins(() => [cloudflare()]),
 });

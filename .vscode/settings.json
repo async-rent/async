@@ -21,12 +21,15 @@
     "source.fixAll.oxc": "explicit"
   },
   "files.watcherExclude": {
+    "**/worker-configuration.d.ts": true,
     "**/routeTree.gen.ts": true
   },
   "search.exclude": {
+    "**/worker-configuration.d.ts": true,
     "**/routeTree.gen.ts": true
   },
   "files.readonlyInclude": {
+    "**/worker-configuration.d.ts": true,
     "**/routeTree.gen.ts": true
   }
 }

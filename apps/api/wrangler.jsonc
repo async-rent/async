@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "async-rent-api",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-10-19",
+  "assets": { "directory": "public" },
+  "observability": {
+    "enabled": true,
+  },
+}
