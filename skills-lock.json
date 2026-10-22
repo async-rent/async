@@ -25,6 +25,12 @@
       "skillPath": "skills/cloudflare-email-service/SKILL.md",
       "computedHash": "ab3734ed36339d1f7c48de02fedd9e42da4f7eee2950a3f094d91cfec604b8d8"
     },
+    "design-taste-frontend": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/taste-skill/SKILL.md",
+      "computedHash": "69021ac7e671c0c0d85d65b570003cef360b1c296323fa28c042884e146478ca"
+    },
     "durable-objects": {
       "source": "cloudflare/skills",
       "sourceType": "github",
