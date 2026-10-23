@@ -12,10 +12,11 @@
     "check": "vp check"
   },
   "dependencies": {
-    "uuid": "catalog:",
+    "drizzle-orm": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@total-typescript/shoehorn": "catalog:",
     "@types/node": "catalog:",
     "bumpp": "catalog:",
     "typescript": "catalog:",
