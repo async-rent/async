@@ -12,6 +12,7 @@
     "check": "vp check"
   },
   "dependencies": {
+    "drizzle-orm": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
