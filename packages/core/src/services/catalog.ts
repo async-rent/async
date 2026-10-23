@@ -13,12 +13,7 @@ const productsTable = {} as SQLiteTable;
 export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   const createProductResult = createResult(
     z.void(),
-    z.enum([
-      "product_already_exists",
-      "product_slug_already_exists",
-      "failed_to_fetch_product",
-      "failed_to_save_product",
-    ]),
+    z.enum(["product_already_exists", "failed_to_fetch_product", "failed_to_save_product"]),
   );
 
   async function createProduct(
@@ -30,17 +25,11 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
       .select()
       .from(productsTable)
       .catch(() => null);
-    if (!existingProducts || existingProducts.length)
-      return failed("failed_to_fetch_product", "Failed to fetch product");
+    if (!existingProducts) return failed("failed_to_fetch_product", "Failed to fetch product");
 
     const [existingProduct] = existingProducts;
-    if (existingProduct.id === product.id)
+    if (existingProduct)
       return failed("product_already_exists", `Product with id ${product.id} already exists`);
-    if (existingProduct.slug === product.slug)
-      return failed(
-        "product_slug_already_exists",
-        `Product with slug ${product.slug} already exists`,
-      );
 
     const saveProduct = await db
       .insert(productsTable)

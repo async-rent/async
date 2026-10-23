@@ -95,19 +95,16 @@ export function successResult<TSchema extends z.ZodType>(schema: TSchema) {
   };
 }
 
-export function failedResult<TErrorCodeSchema extends z.ZodType<string>>(schema: TErrorCodeSchema) {
+export function failedResult<TErrorCodeSchema extends z.ZodType<string>>(
+  _schema: TErrorCodeSchema,
+) {
   return (
     code: z.infer<TErrorCodeSchema>,
     message: string,
-  ): FailedResult<z.infer<TErrorCodeSchema>> => {
-    return {
-      success: false,
-      error: {
-        code: schema.parse(code),
-        message,
-      },
-    };
-  };
+  ): FailedResult<z.infer<TErrorCodeSchema>> => ({
+    success: false,
+    error: { code, message },
+  });
 }
 
 export function createResult<TSchema extends z.ZodType, TErrorCodeSchema extends z.ZodType<string>>(
