@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { imageSchema, moneySchema, timestampsSchema } from "../utils";
+import { imageSchema, moneySchema, timestampsSchema, paginationSchema } from "../utils";
 
 /**
  * Catalog: the cities Async operates in and the gear available there.
@@ -100,12 +100,6 @@ export const productQuerySchema = z.object({
   q: z.string().optional().describe('Free-text search, e.g. "desk".'),
   categorySlug: z.string().optional(),
   locationSlug: z.string().optional(),
-  maxWeeklyPrice: z
-    .number()
-    .int()
-    .nonnegative()
-    .optional()
-    .describe("Maximum weekly price in minor units."),
   sort: productSortSchema.default("featured"),
   page: z.number().int().positive().default(1),
   pageSize: z.number().int().positive().max(48).default(12),
@@ -113,13 +107,7 @@ export const productQuerySchema = z.object({
 
 export type ProductQuery = z.infer<typeof productQuerySchema>;
 
-export const productPageSchema = z.object({
-  items: z.array(productSchema),
-  total: z.number().int().nonnegative(),
-  page: z.number().int().positive(),
-  pageSize: z.number().int().positive(),
-  hasMore: z.boolean(),
-});
+export const productPageSchema = paginationSchema(productSchema);
 
 export type ProductPage = z.infer<typeof productPageSchema>;
 
