@@ -1,15 +1,17 @@
 import { z } from "zod";
-import { amountSchema, currencyCodeSchema, imageSchema, moneySchema } from "../utils";
+import { amountSchema, currencyCodeSchema, imageSchema } from "../utils";
 
 /**
  * Cart and checkout totals.
  *
- * Rentals are weekly. The first week plus any deposit and delivery fee is
- * captured today through PayPal; the following weeks are billed weekly.
+ * A cart is single-currency: `summary.currency` applies to every line and to
+ * every amount in the summary, so a cart can never sum amounts of different
+ * currencies. Rentals are weekly. The first week plus any deposit and delivery
+ * fee is captured today through PayPal; the following weeks are billed weekly.
  */
 
 export const chargeSummarySchema = z.object({
-  currency: currencyCodeSchema,
+  currency: currencyCodeSchema.describe("Currency for the whole cart; every amount is in it."),
   weeklySubtotal: amountSchema.describe("Sum of weekly line prices."),
   deposit: amountSchema.default(0).describe("Refundable deposit."),
   deliveryFee: amountSchema.default(0).describe("Delivery and setup charge."),
@@ -28,8 +30,8 @@ export const cartItemSchema = z.object({
   slug: z.string().describe("Product slug for linking back to the catalog."),
   image: imageSchema.optional(),
   quantity: z.number().int().positive().default(1),
-  weeklyPrice: moneySchema,
-  deposit: moneySchema.optional(),
+  weeklyPrice: amountSchema.describe("Weekly price in the cart's currency."),
+  deposit: amountSchema.optional().describe("Refundable deposit in the cart's currency."),
 });
 
 export type CartItem = z.infer<typeof cartItemSchema>;

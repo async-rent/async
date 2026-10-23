@@ -8,6 +8,8 @@ export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
 }
 
+const productsTable = {} as SQLiteTable;
+
 export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   const createProductResult = createResult(
     z.void(),
@@ -18,6 +20,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
       "failed_to_save_product",
     ]),
   );
+
   async function createProduct(
     product: Product,
   ): Promise<z.infer<(typeof createProductResult)["schema"]>> {
@@ -25,21 +28,22 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
     const existingProducts = await db
       .select()
-      .from({} as SQLiteTable)
+      .from(productsTable)
       .catch(() => null);
-    if (!existingProducts) return failed("failed_to_fetch_product", "Failed to fetch product");
+    if (!existingProducts || existingProducts.length)
+      return failed("failed_to_fetch_product", "Failed to fetch product");
 
     const [existingProduct] = existingProducts;
-    if (existingProduct && existingProduct.id === product.id)
+    if (existingProduct.id === product.id)
       return failed("product_already_exists", `Product with id ${product.id} already exists`);
-    if (existingProduct && existingProduct.slug === product.slug)
+    if (existingProduct.slug === product.slug)
       return failed(
         "product_slug_already_exists",
         `Product with slug ${product.slug} already exists`,
       );
 
     const saveProduct = await db
-      .insert({} as SQLiteTable)
+      .insert(productsTable)
       .values({})
       .returning({})
       .catch(() => null);
