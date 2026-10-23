@@ -21,9 +21,9 @@ const product = productSchema.parse({
   category: { id: "cat_desks", slug: "desks", name: "Desks" },
   images: [{ url: "https://cdn.async.rent/smartdesk-pro.jpg", alt: "SmartDesk Pro" }],
   prices: [
-    { locationSlug: "bali", weeklyPrice: { amount: 12000, currency: "USD" }, stock: 3 },
-    { locationSlug: "lisbon", weeklyPrice: { amount: 15000, currency: "USD" }, stock: 0 },
-    { locationSlug: "da-nang", weeklyPrice: { amount: 11000, currency: "USD" } },
+    { locationSlug: "bali", currency: "USD", weeklyPrice: 12000, stock: 3 },
+    { locationSlug: "lisbon", currency: "USD", weeklyPrice: 15000, stock: 0 },
+    { locationSlug: "da-nang", currency: "USD", weeklyPrice: 11000 },
   ],
   createdAt: "2026-10-24T09:30:00Z",
 });
@@ -64,15 +64,28 @@ test("failed() never throws, even for a code outside the enum", () => {
 });
 
 test("priceForLocation resolves a listed city and misses an unlisted one", () => {
-  expect(priceForLocation(product, "bali")?.weeklyPrice.amount).toBe(12000);
+  expect(priceForLocation(product, "bali")?.weeklyPrice).toBe(12000);
   expect(priceForLocation(product, "chiang-mai")).toBeUndefined();
 });
 
-test("isAvailableIn respects stock and missing cities", () => {
+test("a product cannot list the same city twice", () => {
+  const result = productSchema.safeParse({
+    ...product,
+    prices: [
+      { locationSlug: "bali", currency: "USD", weeklyPrice: 12000 },
+      { locationSlug: "bali", currency: "USD", weeklyPrice: 13000 },
+    ],
+  });
+
+  expect(result.success).toBe(false);
+});
+
+test("isAvailableIn respects status, stock and missing cities", () => {
   expect(isAvailableIn(product, "bali")).toBe(true);
   expect(isAvailableIn(product, "da-nang")).toBe(true);
   expect(isAvailableIn(product, "lisbon")).toBe(false);
   expect(isAvailableIn(product, "chiang-mai")).toBe(false);
+  expect(isAvailableIn({ ...product, status: "archived" }, "bali")).toBe(false);
 });
 
 test("a cart is single-currency: line prices are bare minor units", () => {
@@ -98,21 +111,23 @@ test("a cart is single-currency: line prices are bare minor units", () => {
   expect(cart.items[0]?.weeklyPrice).toBe(12000);
 });
 
-test("a payment represents one cycle of a weekly agreement", () => {
+test("a payment represents one cycle of a recurring agreement", () => {
   const payment = paymentSchema.parse({
     id: "pay_1",
     rentalId: "rental_1",
+    billingAgreementId: "bagr_1",
     provider: "paypal",
-    agreementId: "I-AGR123",
     billingCycle: 1,
-    orderId: "ORDER123",
-    amount: { amount: 12000, currency: "USD" },
-    status: "captured",
+    externalOrderId: "ORDER123",
+    amount: 12000,
+    currency: "USD",
+    status: "succeeded",
     createdAt: "2026-10-24T09:30:00Z",
   });
 
   expect(payment.billingCycle).toBe(1);
-  expect(payment.agreementId).toBe("I-AGR123");
+  expect(payment.status).toBe("succeeded");
+  expect(payment.billingAgreementId).toBe("bagr_1");
 });
 
 test("dateSchema rejects impossible calendar dates", () => {

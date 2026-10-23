@@ -1,49 +1,53 @@
 import { z } from "zod";
-import { dateTimeSchema, moneySchema, timestampsSchema } from "../utils";
+import { amountSchema, currencyCodeSchema, dateTimeSchema, timestampsSchema } from "../utils";
 
 /**
- * PayPal payment for one week of a rental.
+ * A single charge against a rental.
  *
- * The API creates a PayPal order, the buyer approves it, and the API captures
- * it. The captured charge covers the first week; the same payment carries the
- * `agreementId` that bills the following weeks weekly, and `billingCycle`
- * records which week this payment settles. `orderId` and `captureId` are the
- * ids judges can see in the sandbox dashboard; no card data ever touches Async.
+ * Provider-neutral. The API creates an external order, the buyer approves it,
+ * and the API confirms the charge through whichever provider `provider` names;
+ * PayPal is the only adapter today, and adding another must not reshape this
+ * type. Recurring scheduling lives on the billing agreement, not here — this
+ * record is one settled weekly cycle. No card data ever touches Async.
  */
 
 export const paymentStatusSchema = z.enum([
-  "created",
-  "approved",
-  "captured",
+  "pending",
+  "authorized",
+  "succeeded",
   "failed",
   "refunded",
 ]);
 
 export type PaymentStatus = z.infer<typeof paymentStatusSchema>;
 
-export const paymentProviderSchema = z.literal("paypal");
+export const paymentProviderSchema = z.enum(["paypal"]);
+
+export type PaymentProvider = z.infer<typeof paymentProviderSchema>;
 
 export const paymentSchema = z
   .object({
     id: z.string().describe("Stable payment id."),
     rentalId: z.string(),
-    provider: paymentProviderSchema,
-    agreementId: z
+    billingAgreementId: z
       .string()
-      .describe("PayPal recurring agreement id that schedules the weekly charges."),
+      .optional()
+      .describe("Agreement that schedules this charge, when the rental is recurring."),
     billingCycle: z
       .number()
       .int()
       .positive()
-      .describe("Which weekly cycle this payment settles. 1 is the first week, captured today."),
-    orderId: z.string().describe("PayPal order id for this cycle's charge."),
-    captureId: z.string().optional().describe("PayPal capture id after a successful capture."),
-    amount: moneySchema.describe("Captured amount and currency for this cycle."),
+      .describe("Which weekly cycle this charge settles. 1 is the first week, charged today."),
+    provider: paymentProviderSchema,
+    externalOrderId: z.string().describe("Provider order id for this charge."),
+    externalPaymentId: z
+      .string()
+      .optional()
+      .describe("Provider transaction id after a successful charge."),
+    amount: amountSchema.describe("Charged amount for this cycle, in `currency`."),
+    currency: currencyCodeSchema.describe("Currency the charge was settled in."),
     status: paymentStatusSchema,
     paidAt: dateTimeSchema.optional(),
-    nextChargeAt: dateTimeSchema
-      .optional()
-      .describe("When the agreement next bills, after this cycle settles."),
     failureReason: z.string().optional(),
   })
   .extend(timestampsSchema.shape);

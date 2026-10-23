@@ -2,10 +2,11 @@ import { z } from "zod";
 import { chargeSummarySchema } from "./checkout";
 import { paymentStatusSchema } from "./payment";
 import {
+  currencyCodeSchema,
   dateSchema,
   dateTimeSchema,
   imageSchema,
-  moneySchema,
+  amountSchema,
   timeWindowSchema,
   timestampsSchema,
 } from "../utils";
@@ -20,7 +21,7 @@ import {
 
 export const contactSchema = z.object({
   name: z.string(),
-  email: z.string().email(),
+  email: z.email(),
   whatsapp: z.string().optional(),
 });
 
@@ -61,8 +62,8 @@ export const rentalItemSchema = z.object({
   slug: z.string(),
   image: imageSchema.optional(),
   quantity: z.number().int().positive().default(1),
-  weeklyPrice: moneySchema,
-  deposit: moneySchema.optional(),
+  weeklyPrice: amountSchema.describe("Weekly price in the rental's currency."),
+  deposit: amountSchema.optional().describe("Refundable deposit in the rental's currency."),
 });
 
 export type RentalItem = z.infer<typeof rentalItemSchema>;
@@ -75,6 +76,7 @@ export const rentalSchema = z
     contact: contactSchema,
     address: addressSchema,
     locationSlug: z.string(),
+    currency: currencyCodeSchema.describe("Currency every amount on the rental is in."),
     items: z.array(rentalItemSchema).min(1),
     startDate: dateSchema,
     endDate: dateSchema.optional(),
@@ -83,7 +85,13 @@ export const rentalSchema = z
     status: rentalStatusSchema,
     fulfillmentStatus: fulfillmentStatusSchema.optional(),
     summary: chargeSummarySchema.describe("Amounts captured at checkout."),
-    paymentStatus: paymentStatusSchema.optional(),
+    billingAgreementId: z
+      .string()
+      .optional()
+      .describe("Agreement that bills the following weeks, when recurring."),
+    paymentStatusSnapshot: paymentStatusSchema
+      .optional()
+      .describe("Denormalized copy of the latest payment status for fast reads."),
     termsAcceptedAt: dateTimeSchema.optional(),
     cancelledAt: dateTimeSchema.optional(),
     notes: z.string().optional(),

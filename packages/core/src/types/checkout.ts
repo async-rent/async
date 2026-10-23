@@ -7,17 +7,18 @@ import { amountSchema, currencyCodeSchema, imageSchema } from "../utils";
  * A cart is single-currency: `summary.currency` applies to every line and to
  * every amount in the summary, so a cart can never sum amounts of different
  * currencies. Rentals are weekly. The first week plus any deposit and delivery
- * fee is captured today through PayPal; the following weeks are billed weekly.
+ * fee is captured today through the payment provider; the following weeks are
+ * billed weekly by the billing agreement.
  */
 
 export const chargeSummarySchema = z.object({
   currency: currencyCodeSchema.describe("Currency for the whole cart; every amount is in it."),
   weeklySubtotal: amountSchema.describe("Sum of weekly line prices."),
   deposit: amountSchema.default(0).describe("Refundable deposit."),
-  deliveryFee: amountSchema.default(0).describe("Delivery and setup charge."),
+  deliveryFee: amountSchema.default(0).describe("Delivery and setup charge for the whole order."),
   discount: amountSchema.default(0).describe("Any discount applied at checkout."),
   totalDueToday: amountSchema.describe(
-    "Amount captured by PayPal: weeklySubtotal + deposit + deliveryFee − discount.",
+    "Amount captured at checkout: weeklySubtotal + deposit + deliveryFee − discount.",
   ),
   recurringWeekly: amountSchema.describe("Amount charged every week after the first week."),
 });

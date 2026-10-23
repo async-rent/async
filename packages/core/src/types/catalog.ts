@@ -1,11 +1,19 @@
 import { z } from "zod";
-import { imageSchema, moneySchema, timestampsSchema, paginationSchema } from "../utils";
+import {
+  amountSchema,
+  currencyCodeSchema,
+  imageSchema,
+  timestampsSchema,
+  paginationSchema,
+} from "../utils";
 
 /**
  * Catalog: the cities Async operates in and the gear available there.
  *
- * Storefront and MCP read from these same shapes. Prices are weekly, quoted in
- * USD, and set independently per location so Bali and Lisbon can differ.
+ * Storefront and MCP read from these same shapes. Prices are weekly and set
+ * independently per location, so Bali and Lisbon can differ. Each price row
+ * quotes a single `currency` (USD today); the three amounts in the row are
+ * minor units in that currency.
  */
 
 export const locationSchema = z.object({
@@ -46,10 +54,18 @@ export type CategoryRef = z.infer<typeof categoryRefSchema>;
  */
 export const productPriceSchema = z.object({
   locationSlug: z.string().describe('City this price applies to, e.g. "bali".'),
-  weeklyPrice: moneySchema.describe("Weekly rental price in this city."),
-  deposit: moneySchema.optional().describe("Refundable deposit in this city."),
-  deliveryFee: moneySchema.optional().describe("One-off delivery and setup fee in this city."),
-  stock: z.number().int().nonnegative().optional().describe("Units available in this city."),
+  currency: currencyCodeSchema.describe("Currency every amount in this row is quoted in."),
+  weeklyPrice: amountSchema.describe("Weekly rental price in this city."),
+  deposit: amountSchema.optional().describe("Refundable deposit in this city."),
+  deliveryFee: amountSchema
+    .optional()
+    .describe("One-off delivery and setup fee for this product in this city."),
+  stock: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("Units available in this city. Omit for unlimited."),
 });
 
 export type ProductPrice = z.infer<typeof productPriceSchema>;
@@ -114,10 +130,4 @@ export type ProductPage = z.infer<typeof productPageSchema>;
 /** Resolve a product's price in one city. */
 export function priceForLocation(product: Product, locationSlug: string) {
   return product.prices.find((price) => price.locationSlug === locationSlug);
-}
-
-/** Whether the product can be rented in one city right now. */
-export function isAvailableIn(product: Product, locationSlug: string) {
-  const price = priceForLocation(product, locationSlug);
-  return Boolean(price && (price.stock === undefined || price.stock > 0));
 }

@@ -3,7 +3,6 @@ export * from "./currency-code";
 export * from "./date";
 export * from "./date-time";
 export * from "./image";
-export * from "./money";
 export * from "./pagination";
 export * from "./result";
 export * from "./time-window";
