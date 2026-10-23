@@ -16,6 +16,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@total-typescript/shoehorn": "catalog:",
     "@types/node": "catalog:",
     "bumpp": "catalog:",
     "typescript": "catalog:",
