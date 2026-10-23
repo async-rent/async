@@ -1,4 +1,7 @@
 import { z } from "zod";
 
-/** ISO 8601 calendar date, e.g. `2026-10-24`. */
-export const dateSchema = z.string().describe("ISO 8601 calendar date (YYYY-MM-DD).");
+/** ISO 8601 calendar date. */
+export const dateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .describe("Calendar date in YYYY-MM-DD format.");

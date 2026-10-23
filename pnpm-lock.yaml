@@ -402,9 +402,6 @@ importers:
 
   packages/core:
     dependencies:
-      uuid:
-        specifier: 'catalog:'
-        version: 14.0.3
       zod:
         specifier: 'catalog:'
         version: 4.6.7

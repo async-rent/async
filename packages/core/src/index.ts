@@ -1,2 +1,2 @@
-export * from "./schemas/index";
-export * from "./utils/index";
+export * from "./schemas";
+export * from "./utils";

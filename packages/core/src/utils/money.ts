@@ -4,7 +4,7 @@ import { currencyCodeSchema } from "./currency-code";
 
 /** A monetary value with its currency. */
 export const moneySchema = z.object({
-  amount: amountSchema.describe("Amount in minor units."),
+  amount: amountSchema,
   currency: currencyCodeSchema,
 });
 

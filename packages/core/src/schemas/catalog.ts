@@ -1,78 +1,135 @@
 import { z } from "zod";
-import { currencyCodeSchema } from "../utils/currency-code";
-import { dateSchema } from "../utils/date";
-import { productSchema } from "./product";
+import { imageSchema, moneySchema, timestampsSchema } from "../utils";
 
 /**
- * Catalog read models.
+ * Catalog: the cities Async operates in and the gear available there.
  *
- * These describe the storefront's "All equipment" toolbar: a search query,
- * category/price/availability filters, the most-rented sort and the paginated
- * product grid ("Showing 12 of 25", "Load 12 more").
- *
- * This is a query model, not a persisted entity. The plain `productPageSchema`
- * uses the default product metadata bag; use `createProductPageSchema()` with
- * a category-specific product schema when the page must preserve typed
- * metadata.
+ * Storefront and MCP read from these same shapes. Prices are weekly, quoted in
+ * USD, and set independently per location so Bali and Lisbon can differ.
  */
 
-/** Sort options offered by the catalog toolbar. */
-export const productSortSchema = z
-  .enum(["most_rented", "newest", "price_asc", "price_desc", "name_asc"])
-  .describe("Ordering applied to the product grid.");
+export const locationSchema = z.object({
+  id: z.string().describe("Stable location id."),
+  slug: z.string().describe('URL-safe key used in routes, e.g. "bali".'),
+  name: z.string().describe('Display name, e.g. "Bali".'),
+  country: z.string().describe('Country name, e.g. "Indonesia".'),
+  timezone: z.string().describe('IANA timezone, e.g. "Asia/Makassar".'),
+  description: z.string().optional().describe("One-line description for the city picker."),
+  status: z.enum(["active", "coming_soon"]).default("active"),
+});
+
+export type Location = z.infer<typeof locationSchema>;
+
+export const categorySchema = z.object({
+  id: z.string().describe("Stable category id."),
+  slug: z.string().describe('URL-safe key, e.g. "desks".'),
+  name: z.string().describe('Display name, e.g. "Desks".'),
+  description: z.string().optional().describe("One-line category description."),
+  sortOrder: z.number().int().nonnegative().default(0),
+});
+
+export type Category = z.infer<typeof categorySchema>;
+
+export const categoryRefSchema = categorySchema.pick({
+  id: true,
+  slug: true,
+  name: true,
+});
+
+export type CategoryRef = z.infer<typeof categoryRefSchema>;
+
+/**
+ * A product's price and stock in one city.
+ *
+ * The presence of a row means the product is offered there. Omitting a city
+ * means the product is not available in that location.
+ */
+export const productPriceSchema = z.object({
+  locationSlug: z.string().describe('City this price applies to, e.g. "bali".'),
+  weeklyPrice: moneySchema.describe("Weekly rental price in this city."),
+  deposit: moneySchema.optional().describe("Refundable deposit in this city."),
+  deliveryFee: moneySchema.optional().describe("One-off delivery and setup fee in this city."),
+  stock: z.number().int().nonnegative().optional().describe("Units available in this city."),
+});
+
+export type ProductPrice = z.infer<typeof productPriceSchema>;
+
+export const productStatusSchema = z.enum(["active", "archived"]);
+
+export const productSpecSchema = z.object({
+  label: z.string().describe('Specification name, e.g. "Height range".'),
+  value: z.string().describe('Human-readable value, e.g. "62–128 cm".'),
+});
+
+export type ProductSpec = z.infer<typeof productSpecSchema>;
+
+export const productSchema = z
+  .object({
+    id: z.string().describe("Stable product id."),
+    slug: z.string().describe('URL-safe key used in routes, e.g. "smartdesk-pro".'),
+    name: z.string().describe('Customer-facing name, e.g. "SmartDesk Pro".'),
+    tagline: z.string().describe("One-line description shown on catalog cards."),
+    description: z.string().describe("Long-form copy for the product page."),
+    category: categoryRefSchema,
+    images: z.array(imageSchema).min(1),
+    prices: z
+      .array(productPriceSchema)
+      .min(1)
+      .describe("Per-city prices. A city missing from this list cannot rent the product."),
+    highlights: z.array(z.string()).default([]),
+    specs: z.array(productSpecSchema).default([]),
+    badge: z.string().optional().describe('Merchandising label, e.g. "Most rented".'),
+    featured: z.boolean().default(false),
+    status: productStatusSchema.default("active"),
+  })
+  .extend(timestampsSchema.shape);
+
+export type Product = z.infer<typeof productSchema>;
+
+export const productSortSchema = z.enum([
+  "featured",
+  "price_asc",
+  "price_desc",
+  "name_asc",
+  "newest",
+]);
+
+export type ProductSort = z.infer<typeof productSortSchema>;
 
 export const productQuerySchema = z.object({
-  q: z.string().optional().describe('Free-text search, e.g. "desks, chairs, monitors".'),
-  categorySlugs: z
-    .array(z.string())
-    .optional()
-    .describe("Restrict results to these category slugs."),
-  locationId: z.string().optional().describe("Only show products offered at this location."),
-  currency: currencyCodeSchema
-    .optional()
-    .describe("Currency used to compare and display price filters."),
-  minWeeklyPrice: z
-    .number()
-    .int()
-    .nonnegative()
-    .optional()
-    .describe("Minimum weekly price in minor units, in the query currency."),
+  q: z.string().optional().describe('Free-text search, e.g. "desk".'),
+  categorySlug: z.string().optional(),
+  locationSlug: z.string().optional(),
   maxWeeklyPrice: z
     .number()
     .int()
     .nonnegative()
     .optional()
-    .describe("Maximum weekly price in minor units, in the query currency."),
-  availableFrom: dateSchema
-    .optional()
-    .describe("Only show products with inventory available from this date."),
-  availableTo: dateSchema.optional().describe("Only show products available through this date."),
-  sort: productSortSchema.optional(),
-  page: z.number().int().positive().optional().describe("1-based page number."),
-  pageSize: z.number().int().positive().optional().describe("Products per page."),
+    .describe("Maximum weekly price in minor units."),
+  sort: productSortSchema.default("featured"),
+  page: z.number().int().positive().default(1),
+  pageSize: z.number().int().positive().max(48).default(12),
 });
 
 export type ProductQuery = z.infer<typeof productQuerySchema>;
 
-/**
- * Builds a paginated product page while preserving the product schema's
- * metadata type.
- *
- * @example
- * export const deskPageSchema = createProductPageSchema(deskProductSchema);
- * export type DeskPage = z.infer<typeof deskPageSchema>;
- */
-export function createProductPageSchema<TSchema extends z.ZodType>(product: TSchema) {
-  return z.object({
-    items: z.array(product).describe("Products for the current page."),
-    total: z.number().int().nonnegative().describe("Total number of products matching the query."),
-    page: z.number().int().positive().describe("1-based page number."),
-    pageSize: z.number().int().positive().describe("Products per page."),
-    hasMore: z.boolean().describe("Whether another page is available."),
-  });
-}
-
-/** Plain product page using the default metadata bag. */
-export const productPageSchema = createProductPageSchema(productSchema);
+export const productPageSchema = z.object({
+  items: z.array(productSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+  hasMore: z.boolean(),
+});
 
 export type ProductPage = z.infer<typeof productPageSchema>;
+
+/** Resolve a product's price in one city. */
+export function priceForLocation(product: Product, locationSlug: string) {
+  return product.prices.find((price) => price.locationSlug === locationSlug);
+}
+
+/** Whether the product can be rented in one city right now. */
+export function isAvailableIn(product: Product, locationSlug: string) {
+  const price = priceForLocation(product, locationSlug);
+  return Boolean(price && (price.stock === undefined || price.stock > 0));
+}

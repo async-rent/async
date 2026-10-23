@@ -12,7 +12,6 @@
     "check": "vp check"
   },
   "dependencies": {
-    "uuid": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
