@@ -45,3 +45,28 @@ packages/db  <-  packages/core  <-  apps/api · apps/storefront · apps/studio �
 - Keep external providers (payments, etc.) behind interfaces defined in core; provider specifics live in sibling adapters inside core.
 
 <!--ASYNC ARCHITECTURE END-->
+
+<!--ASYNC STACKED PRS START-->
+
+# Stacked PR Rules
+
+Dependent work ships as a stack — never one big PR, never a branch cut by hand off another feature branch. One issue = one branch = one PR = one stack layer. Trunk is `main`; branches are `feat/<issue>-<slug>` (e.g. `feat/4-cart-rental-payment-tables`). An issue's "Blocked by" line _is_ the stack order.
+
+`gh stack` owns every stack operation:
+
+| Step                                                   | Command                                                                     |
+| ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| Adopt existing branches / start a stack (bottom → top) | `gh stack init <branch...>`                                                 |
+| Add a layer on top of the current one                  | `gh stack add <branch>`                                                     |
+| Push and create/update the PRs                         | `gh stack submit --open`                                                    |
+| Fix a lower layer after review                         | `gh stack checkout <branch>` → commit → `gh stack rebase` → `gh stack push` |
+| Merge the stack (bottom-up, retargets the rest)        | `gh stack merge`                                                            |
+| Link branches that already have PRs                    | `gh stack link <branch...>`                                                 |
+
+- Start the next layer as soon as the bottom PR is open — review never blocks progress. Note the relation in the PR body (`Stacked on #N`).
+- Only stack on a layer that already passes `vp check` and `vp test`: each layer is reviewed on its own, so it must stand alone.
+- Never hand-edit a PR's base branch, `git push --force` a stack branch, or merge a layer out of order. `gh stack` retargets bases, force-pushes with lease, and merges bottom-up — use `gh stack push`, not `git push -f`.
+- Schema migrations: when a lower layer changes the schema, regenerate its migration there, then rebase and regenerate the upper layer's migration against the new baseline (drop the stale `NNNN_*.sql` and its `meta/` journal entry first). Rebase fixes history, not SQL.
+- `gh stack add -A` stages untracked files. Name the branch and use `-u`, so stray notes never land in a layer.
+
+<!--ASYNC STACKED PRS END-->
