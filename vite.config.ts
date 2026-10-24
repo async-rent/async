@@ -10,6 +10,7 @@ export default defineConfig({
       ".claude/*",
       "**/worker-configuration.d.ts",
       "**/routeTree.gen.ts",
+      "packages/db/migrations/meta/*",
     ],
   },
   lint: {
