@@ -44,7 +44,7 @@ export const productImages = sqliteTable(
     productId: text("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    position: integer("position").notNull().default(0),
+    position: integer("position").notNull(),
     url: text("url").notNull(),
     alt: text("alt"),
   },
@@ -61,7 +61,7 @@ export const productHighlights = sqliteTable(
     productId: text("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    position: integer("position").notNull().default(0),
+    position: integer("position").notNull(),
     value: text("value").notNull(),
   },
   (table) => [
@@ -77,7 +77,7 @@ export const productSpecs = sqliteTable(
     productId: text("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    position: integer("position").notNull().default(0),
+    position: integer("position").notNull(),
     label: text("label").notNull(),
     value: text("value").notNull(),
   },

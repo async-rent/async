@@ -27,7 +27,7 @@ CREATE UNIQUE INDEX `locations_slug_unique` ON `locations` (`slug`);--> statemen
 CREATE INDEX `locations_status_idx` ON `locations` (`status`);--> statement-breakpoint
 CREATE TABLE `product_highlights` (
 	`product_id` text NOT NULL,
-	`position` integer DEFAULT 0 NOT NULL,
+	`position` integer NOT NULL,
 	`value` text NOT NULL,
 	PRIMARY KEY(`product_id`, `position`),
 	FOREIGN KEY (`product_id`) REFERENCES `products`(`id`) ON UPDATE cascade ON DELETE cascade,
@@ -36,7 +36,7 @@ CREATE TABLE `product_highlights` (
 --> statement-breakpoint
 CREATE TABLE `product_images` (
 	`product_id` text NOT NULL,
-	`position` integer DEFAULT 0 NOT NULL,
+	`position` integer NOT NULL,
 	`url` text NOT NULL,
 	`alt` text,
 	PRIMARY KEY(`product_id`, `position`),
@@ -67,7 +67,7 @@ CREATE TABLE `product_prices` (
 CREATE INDEX `product_prices_location_id_idx` ON `product_prices` (`location_id`);--> statement-breakpoint
 CREATE TABLE `product_specs` (
 	`product_id` text NOT NULL,
-	`position` integer DEFAULT 0 NOT NULL,
+	`position` integer NOT NULL,
 	`label` text NOT NULL,
 	`value` text NOT NULL,
 	PRIMARY KEY(`product_id`, `position`),
