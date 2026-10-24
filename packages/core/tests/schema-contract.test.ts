@@ -271,14 +271,20 @@ describe("cart items table", () => {
   });
 
   it("rejects an invalid position, quantity, price or deposit", () => {
-    const names = [
-      "cart_items_position_check",
-      "cart_items_quantity_check",
-      "cart_items_weekly_price_check",
-      "cart_items_deposit_check",
+    // Each check is pinned to its own predicate, so weakening a bound —
+    // say `quantity > 0` to `quantity >= 0` — fails the test.
+    const predicates: [string, string[]][] = [
+      ["cart_items_position_check", [">= 0"]],
+      ["cart_items_quantity_check", ["> 0"]],
+      ["cart_items_weekly_price_check", [">= 0"]],
+      ["cart_items_deposit_check", ["is null", ">= 0"]],
     ];
 
-    for (const name of names) expect(() => checkSqlOf(cartItems, name)).not.toThrow();
+    for (const [name, bounds] of predicates) {
+      const rendered = checkSqlOf(cartItems, name);
+
+      for (const bound of bounds) expect(rendered).toContain(bound);
+    }
   });
 });
 
@@ -315,14 +321,20 @@ describe("rental items table", () => {
   });
 
   it("rejects an invalid position, quantity, price or deposit", () => {
-    const names = [
-      "rental_items_position_check",
-      "rental_items_quantity_check",
-      "rental_items_weekly_price_check",
-      "rental_items_deposit_check",
+    // Each check is pinned to its own predicate, so weakening a bound —
+    // say `quantity > 0` to `quantity >= 0` — fails the test.
+    const predicates: [string, string[]][] = [
+      ["rental_items_position_check", [">= 0"]],
+      ["rental_items_quantity_check", ["> 0"]],
+      ["rental_items_weekly_price_check", [">= 0"]],
+      ["rental_items_deposit_check", ["is null", ">= 0"]],
     ];
 
-    for (const name of names) expect(() => checkSqlOf(rentalItems, name)).not.toThrow();
+    for (const [name, bounds] of predicates) {
+      const rendered = checkSqlOf(rentalItems, name);
+
+      for (const bound of bounds) expect(rendered).toContain(bound);
+    }
   });
 });
 
