@@ -9,7 +9,6 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "generate": "drizzle-kit generate",
-    "test": "vp test",
     "check": "vp check"
   },
   "dependencies": {
