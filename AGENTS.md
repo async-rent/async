@@ -25,3 +25,23 @@ release. Add a tool name to select part of the graph. For example, run
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
 
 <!--VITE PLUS END-->
+
+<!--ASYNC ARCHITECTURE START-->
+
+# Async Architecture Rules
+
+Dependency direction — never violate it:
+
+```
+packages/db  <-  packages/core  <-  apps/api · apps/storefront · apps/studio · tools/mcp
+```
+
+- **`packages/db`** exports the Drizzle D1 schema only (tables + inferred types). No logic, no queries.
+- **`packages/core`** is the only package with data access. It owns Drizzle migrations and seeds (D1 via its `wrangler.jsonc`) and exposes composable services used by every user-facing app. Follow the pattern in `packages/core/src/services/catalog.ts`: `create<Name>Service({ db }: Create<Name>ServiceOptions)` factory + `createResult` success/failure unions (zod-typed).
+- **User-facing apps compose `core` only** — never import `db`, never skip core:
+  - `apps/api`: core → HTTP API (Hono). Authenticated with user-created API keys.
+  - `apps/storefront` / `apps/studio`: core → TanStack Start server actions. They never call the api app.
+  - `tools/mcp`: core → MCP tools. Same composition as api, but authenticated with OAuth. It never calls the api app.
+- Keep external providers (payments, etc.) behind interfaces defined in core; provider specifics live in sibling adapters inside core.
+
+<!--ASYNC ARCHITECTURE END-->
