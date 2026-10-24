@@ -8,10 +8,39 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import { enumValuesSql } from "../utils/enum";
 import { billingAgreements } from "./billing";
-import { enumValuesSql, paymentProviderValues, paymentStatusValues } from "./enums";
 import { rentals } from "./rental";
 import { timestamps } from "./timestamps";
+
+/**
+ * Payment status values, mirroring core's `paymentStatusSchema`.
+ *
+ * `packages/db` cannot import core's zod schemas (core depends on db), so the
+ * literal union lives here and a core-side test asserts parity.
+ *
+ * Exported as a function rather than a constant: `rental.ts` reuses these
+ * values for the payment status it snapshots, and this file imports `rental.ts`
+ * back for the payments table. A constant would be read before this module
+ * finished initializing, a hoisted function is always available.
+ */
+export function paymentStatusValues() {
+  return ["pending", "authorized", "succeeded", "failed", "refunded"] as const;
+}
+
+export type PaymentStatusValue = ReturnType<typeof paymentStatusValues>[number];
+
+/**
+ * Payment provider values, mirroring core's `paymentProviderSchema`.
+ *
+ * A function for the same reason as `paymentStatusValues`: `billing.ts` reuses
+ * these values for the provider mandate it stores.
+ */
+export function paymentProviderValues() {
+  return ["paypal"] as const;
+}
+
+export type PaymentProviderValue = ReturnType<typeof paymentProviderValues>[number];
 
 /**
  * One charge against a rental.
@@ -29,7 +58,8 @@ import { timestamps } from "./timestamps";
  *
  * The agreement is bound to the rental by a composite foreign key on
  * `(billing_agreement_id, rental_id)`, so a payment can never point at another
- * rental's agreement.
+ * rental's agreement. The key is resolved lazily, because the tables import
+ * each other.
  */
 export const payments = sqliteTable(
   "payments",
@@ -40,12 +70,12 @@ export const payments = sqliteTable(
       .references(() => rentals.id, { onDelete: "restrict", onUpdate: "cascade" }),
     billingAgreementId: text("billing_agreement_id"),
     billingCycle: integer("billing_cycle").notNull(),
-    provider: text("provider", { enum: paymentProviderValues }).notNull(),
+    provider: text("provider", { enum: paymentProviderValues() }).notNull(),
     externalOrderId: text("external_order_id").notNull(),
     externalPaymentId: text("external_payment_id"),
     amount: integer("amount").notNull(),
     currency: text("currency").notNull(),
-    status: text("status", { enum: paymentStatusValues }).notNull(),
+    status: text("status", { enum: paymentStatusValues() }).notNull(),
     paidAt: integer("paid_at", { mode: "timestamp_ms" }),
     failureReason: text("failure_reason"),
     ...timestamps,
@@ -54,19 +84,22 @@ export const payments = sqliteTable(
     check("payments_billing_cycle_check", sql`${table.billingCycle} > 0`),
     check(
       "payments_provider_check",
-      sql`${table.provider} in (${enumValuesSql(paymentProviderValues)})`,
+      sql`${table.provider} in (${enumValuesSql(paymentProviderValues())})`,
     ),
-    check("payments_status_check", sql`${table.status} in (${enumValuesSql(paymentStatusValues)})`),
+    check(
+      "payments_status_check",
+      sql`${table.status} in (${enumValuesSql(paymentStatusValues())})`,
+    ),
     check(
       "payments_currency_check",
       sql`length(${table.currency}) = 3 and ${table.currency} glob '[A-Z][A-Z][A-Z]'`,
     ),
     check("payments_amount_check", sql`${table.amount} >= 0`),
-    foreignKey({
+    foreignKey(() => ({
       name: "payments_billing_agreement_rental_fk",
       columns: [table.billingAgreementId, table.rentalId],
       foreignColumns: [billingAgreements.id, billingAgreements.rentalId],
-    })
+    }))
       .onDelete("restrict")
       .onUpdate("cascade"),
     uniqueIndex("payments_rental_id_billing_cycle_unique").on(table.rentalId, table.billingCycle),

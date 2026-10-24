@@ -31,11 +31,11 @@ describe("db enum values", () => {
   });
 
   it("match paymentStatusSchema", () => {
-    expect(paymentStatusValues).toEqual(paymentStatusSchema.options);
+    expect(paymentStatusValues()).toEqual(paymentStatusSchema.options);
   });
 
   it("match paymentProviderSchema", () => {
-    expect(paymentProviderValues).toEqual(paymentProviderSchema.options);
+    expect(paymentProviderValues()).toEqual(paymentProviderSchema.options);
   });
 
   it("match billingAgreementStatusSchema", () => {

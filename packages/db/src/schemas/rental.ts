@@ -1,14 +1,36 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import {
-  enumValuesSql,
-  fulfillmentStatusValues,
-  paymentStatusValues,
-  rentalStatusValues,
-} from "./enums";
+import { enumValuesSql } from "../utils/enum";
+import { paymentStatusValues } from "./payment";
 import { locations } from "./location";
 import { products } from "./product";
 import { timestamps } from "./timestamps";
+
+/**
+ * Rental status values, mirroring core's `rentalStatusSchema`.
+ *
+ * `packages/db` cannot import core's zod schemas (core depends on db), so the
+ * literal union lives here and a core-side test asserts parity.
+ */
+export const rentalStatusValues = [
+  "pending_payment",
+  "confirmed",
+  "active",
+  "completed",
+  "cancelled",
+] as const;
+
+export type RentalStatusValue = (typeof rentalStatusValues)[number];
+
+/** Fulfillment status values, mirroring core's `fulfillmentStatusSchema`. */
+export const fulfillmentStatusValues = [
+  "scheduled",
+  "in_transit",
+  "delivered",
+  "returned",
+] as const;
+
+export type FulfillmentStatusValue = (typeof fulfillmentStatusValues)[number];
 
 /**
  * A placed rental: the order, its delivery snapshot and its money.
@@ -59,7 +81,7 @@ export const rentals = sqliteTable(
     discount: integer("discount").notNull().default(0),
     totalDueToday: integer("total_due_today").notNull().default(0),
     recurringWeekly: integer("recurring_weekly").notNull().default(0),
-    paymentStatusSnapshot: text("payment_status_snapshot", { enum: paymentStatusValues }),
+    paymentStatusSnapshot: text("payment_status_snapshot", { enum: paymentStatusValues() }),
     termsAcceptedAt: integer("terms_accepted_at", { mode: "timestamp_ms" }),
     cancelledAt: integer("cancelled_at", { mode: "timestamp_ms" }),
     notes: text("notes"),
@@ -73,7 +95,7 @@ export const rentals = sqliteTable(
     ),
     check(
       "rentals_payment_status_snapshot_check",
-      sql`${table.paymentStatusSnapshot} is null or ${table.paymentStatusSnapshot} in (${enumValuesSql(paymentStatusValues)})`,
+      sql`${table.paymentStatusSnapshot} is null or ${table.paymentStatusSnapshot} in (${enumValuesSql(paymentStatusValues())})`,
     ),
     check(
       "rentals_currency_check",

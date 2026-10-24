@@ -198,14 +198,15 @@ describe("check constraints", () => {
 
     for (const status of rentalStatusValues) expect(checks).toContain(`'${status}'`);
     for (const status of fulfillmentStatusValues) expect(checks).toContain(`'${status}'`);
-    for (const status of paymentStatusValues) expect(checks).toContain(`'${status}'`);
+    for (const status of paymentStatusValues()) expect(checks).toContain(`'${status}'`);
   });
 
   it("derive the payment and billing statuses from the shared enum values", () => {
     const paymentChecks = checkSqlOf(payments);
 
-    for (const status of paymentStatusValues) expect(paymentChecks).toContain(`'${status}'`);
-    for (const provider of paymentProviderValues) expect(paymentChecks).toContain(`'${provider}'`);
+    for (const status of paymentStatusValues()) expect(paymentChecks).toContain(`'${status}'`);
+    for (const provider of paymentProviderValues())
+      expect(paymentChecks).toContain(`'${provider}'`);
 
     const billingChecks = checkSqlOf(billingAgreements);
 

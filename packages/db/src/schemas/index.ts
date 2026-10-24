@@ -1,7 +1,6 @@
 export * from "./billing";
 export * from "./cart";
 export * from "./category";
-export * from "./enums";
 export * from "./location";
 export * from "./payment";
 export * from "./product";

@@ -1,13 +1,23 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import {
-  billingAgreementStatusValues,
-  billingIntervalValues,
-  enumValuesSql,
-  paymentProviderValues,
-} from "./enums";
+import { enumValuesSql } from "../utils/enum";
+import { paymentProviderValues } from "./payment";
 import { rentals } from "./rental";
 import { timestamps } from "./timestamps";
+/**
+ * Billing agreement status values, mirroring core's `billingAgreementStatusSchema`.
+ *
+ * `packages/db` cannot import core's zod schemas (core depends on db), so the
+ * literal union lives here and a core-side test asserts parity.
+ */
+export const billingAgreementStatusValues = ["active", "paused", "cancelled", "completed"] as const;
+
+export type BillingAgreementStatusValue = (typeof billingAgreementStatusValues)[number];
+
+/** Billing interval values, mirroring core's `billingIntervalSchema`. */
+export const billingIntervalValues = ["weekly"] as const;
+
+export type BillingIntervalValue = (typeof billingIntervalValues)[number];
 
 /**
  * The recurring schedule that bills a rental.
@@ -32,7 +42,7 @@ export const billingAgreements = sqliteTable(
     rentalId: text("rental_id")
       .notNull()
       .references(() => rentals.id, { onDelete: "restrict", onUpdate: "cascade" }),
-    provider: text("provider", { enum: paymentProviderValues }).notNull(),
+    provider: text("provider", { enum: paymentProviderValues() }).notNull(),
     providerAgreementId: text("provider_agreement_id"),
     interval: text("interval", { enum: billingIntervalValues }).notNull().default("weekly"),
     currency: text("currency").notNull(),
@@ -44,7 +54,7 @@ export const billingAgreements = sqliteTable(
   (table) => [
     check(
       "billing_agreements_provider_check",
-      sql`${table.provider} in (${enumValuesSql(paymentProviderValues)})`,
+      sql`${table.provider} in (${enumValuesSql(paymentProviderValues())})`,
     ),
     check(
       "billing_agreements_interval_check",
