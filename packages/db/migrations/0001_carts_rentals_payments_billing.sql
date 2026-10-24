@@ -18,6 +18,7 @@ CREATE TABLE `billing_agreements` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `billing_agreements_rental_id_live_unique` ON `billing_agreements` (`rental_id`) WHERE "billing_agreements"."status" in ('active', 'paused');--> statement-breakpoint
+CREATE INDEX `billing_agreements_rental_id_idx` ON `billing_agreements` (`rental_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `billing_agreements_id_rental_id_unique` ON `billing_agreements` (`id`,`rental_id`);--> statement-breakpoint
 CREATE INDEX `billing_agreements_status_next_charge_at_idx` ON `billing_agreements` (`status`,`next_charge_at`);--> statement-breakpoint
 CREATE TABLE `cart_items` (
@@ -95,6 +96,7 @@ CREATE TABLE `payments` (
 CREATE UNIQUE INDEX `payments_rental_id_billing_cycle_unique` ON `payments` (`rental_id`,`billing_cycle`);--> statement-breakpoint
 CREATE UNIQUE INDEX `payments_provider_external_order_id_unique` ON `payments` (`provider`,`external_order_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `payments_provider_external_payment_id_unique` ON `payments` (`provider`,`external_payment_id`);--> statement-breakpoint
+CREATE INDEX `payments_billing_agreement_id_idx` ON `payments` (`billing_agreement_id`);--> statement-breakpoint
 CREATE INDEX `payments_status_idx` ON `payments` (`status`);--> statement-breakpoint
 CREATE TABLE `rental_items` (
 	`rental_id` text NOT NULL,

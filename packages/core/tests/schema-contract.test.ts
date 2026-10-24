@@ -1,11 +1,15 @@
 import {
-  billingAgreements,
   billingAgreementStatusValues,
+  billingAgreements,
+  billingIntervalValues,
+  cartItems,
   carts,
   fulfillmentStatusValues,
+  liveBillingAgreementStatusValues,
   paymentProviderValues,
   paymentStatusValues,
   payments,
+  rentalItems,
   rentals,
   rentalStatusValues,
 } from "@async-rent/db";
@@ -16,7 +20,8 @@ import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
- * The constraint contract of the cart, rental, payment and billing tables.
+ * The constraint contract of the cart, line item, rental, payment and billing
+ * tables.
  *
  * The database is the only place these guarantees live, so they are asserted
  * here rather than left to a later migration to drop by accident. Core owns
@@ -68,10 +73,19 @@ function foreignKeysOf(table: SQLiteTable): ForeignKeySummary[] {
   });
 }
 
-function checkSqlOf(table: SQLiteTable): string {
-  return getTableConfig(table)
-    .checks.map((check) => dialect.sqlToQuery(check.value as SQL).sql)
-    .join("\n");
+function checkSqlOf(table: SQLiteTable, name: string): string {
+  const found = getTableConfig(table).checks.find((check) => check.name === name);
+
+  if (!found) throw new Error(`No check named ${name}`);
+
+  return dialect.sqlToQuery(found.value as SQL).sql;
+}
+
+function primaryKeysOf(table: SQLiteTable): { name: string; columns: string[] }[] {
+  return getTableConfig(table).primaryKeys.map((primaryKey) => ({
+    name: primaryKey.getName(),
+    columns: columnNames(primaryKey.columns),
+  }));
 }
 
 describe("payments table", () => {
@@ -116,6 +130,16 @@ describe("payments table", () => {
     );
   });
 
+  it("keeps agreement lookups off a table scan", () => {
+    expect(indexesOf(payments)).toContainEqual(
+      expect.objectContaining({
+        name: "payments_billing_agreement_id_idx",
+        unique: false,
+        columns: ["billing_agreement_id"],
+      }),
+    );
+  });
+
   it("keeps money history when a rental is deleted", () => {
     const rentalReference = foreignKeysOf(payments).find(
       (foreignKey) => foreignKey.columns.join() === "rental_id",
@@ -133,8 +157,30 @@ describe("billing agreements table", () => {
 
     expect(index?.unique).toBe(true);
     expect(index?.columns).toEqual(["rental_id"]);
-    expect(index?.where).toContain("'active'");
-    expect(index?.where).toContain("'paused'");
+
+    // The rendered WHERE clause is built from `liveBillingAgreementStatusValues`,
+    // so a status cannot become "live" without moving through that list.
+    const where = index?.where ?? "";
+    const live = new Set<string>(liveBillingAgreementStatusValues);
+
+    for (const status of liveBillingAgreementStatusValues) {
+      expect(where).toContain(`'${status}'`);
+    }
+    for (const status of billingAgreementStatusValues) {
+      if (!live.has(status)) {
+        expect(where).not.toContain(`'${status}'`);
+      }
+    }
+  });
+
+  it("serves a rental-scoped agreement read whatever the statuses", () => {
+    expect(indexesOf(billingAgreements)).toContainEqual(
+      expect.objectContaining({
+        name: "billing_agreements_rental_id_idx",
+        unique: false,
+        columns: ["rental_id"],
+      }),
+    );
   });
 
   it("exposes the parent key the payment composite foreign key needs", () => {
@@ -192,25 +238,127 @@ describe("carts table", () => {
   });
 });
 
-describe("check constraints", () => {
-  it("derive the rental statuses from the shared enum values", () => {
-    const checks = checkSqlOf(rentals);
-
-    for (const status of rentalStatusValues) expect(checks).toContain(`'${status}'`);
-    for (const status of fulfillmentStatusValues) expect(checks).toContain(`'${status}'`);
-    for (const status of paymentStatusValues()) expect(checks).toContain(`'${status}'`);
+describe("cart items table", () => {
+  it("belongs to its cart", () => {
+    expect(foreignKeysOf(cartItems)).toContainEqual(
+      expect.objectContaining({
+        columns: ["cart_id"],
+        referenceTable: "carts",
+        referenceColumns: ["id"],
+        onDelete: "cascade",
+      }),
+    );
   });
 
-  it("derive the payment and billing statuses from the shared enum values", () => {
-    const paymentChecks = checkSqlOf(payments);
+  it("points at the product primary key", () => {
+    expect(foreignKeysOf(cartItems)).toContainEqual(
+      expect.objectContaining({
+        columns: ["product_id"],
+        referenceTable: "products",
+        referenceColumns: ["id"],
+        onDelete: "restrict",
+      }),
+    );
+  });
 
-    for (const status of paymentStatusValues()) expect(paymentChecks).toContain(`'${status}'`);
-    for (const provider of paymentProviderValues())
-      expect(paymentChecks).toContain(`'${provider}'`);
+  it("orders lines by position within the cart", () => {
+    expect(primaryKeysOf(cartItems)).toContainEqual(
+      expect.objectContaining({
+        name: "cart_items_pk",
+        columns: ["cart_id", "position"],
+      }),
+    );
+  });
 
-    const billingChecks = checkSqlOf(billingAgreements);
+  it("rejects an invalid position, quantity, price or deposit", () => {
+    const names = [
+      "cart_items_position_check",
+      "cart_items_quantity_check",
+      "cart_items_weekly_price_check",
+      "cart_items_deposit_check",
+    ];
 
-    for (const status of billingAgreementStatusValues)
-      expect(billingChecks).toContain(`'${status}'`);
+    for (const name of names) expect(() => checkSqlOf(cartItems, name)).not.toThrow();
+  });
+});
+
+describe("rental items table", () => {
+  it("belongs to its rental", () => {
+    expect(foreignKeysOf(rentalItems)).toContainEqual(
+      expect.objectContaining({
+        columns: ["rental_id"],
+        referenceTable: "rentals",
+        referenceColumns: ["id"],
+        onDelete: "cascade",
+      }),
+    );
+  });
+
+  it("points at the product primary key", () => {
+    expect(foreignKeysOf(rentalItems)).toContainEqual(
+      expect.objectContaining({
+        columns: ["product_id"],
+        referenceTable: "products",
+        referenceColumns: ["id"],
+        onDelete: "restrict",
+      }),
+    );
+  });
+
+  it("orders lines by position within the rental", () => {
+    expect(primaryKeysOf(rentalItems)).toContainEqual(
+      expect.objectContaining({
+        name: "rental_items_pk",
+        columns: ["rental_id", "position"],
+      }),
+    );
+  });
+
+  it("rejects an invalid position, quantity, price or deposit", () => {
+    const names = [
+      "rental_items_position_check",
+      "rental_items_quantity_check",
+      "rental_items_weekly_price_check",
+      "rental_items_deposit_check",
+    ];
+
+    for (const name of names) expect(() => checkSqlOf(rentalItems, name)).not.toThrow();
+  });
+});
+
+describe("check constraints", () => {
+  /**
+   * Asserts a single named check against a single enum list. A check bound to
+   * the wrong list fails here, where a table-wide string match would not.
+   */
+  function expectEnumCheck(table: SQLiteTable, name: string, values: readonly string[]): void {
+    const rendered = checkSqlOf(table, name);
+
+    for (const value of values) expect(rendered).toContain(`'${value}'`);
+  }
+
+  it("binds each rental check to its own enum values", () => {
+    expectEnumCheck(rentals, "rentals_status_check", rentalStatusValues);
+    expectEnumCheck(rentals, "rentals_fulfillment_status_check", fulfillmentStatusValues);
+    expectEnumCheck(rentals, "rentals_payment_status_snapshot_check", paymentStatusValues());
+  });
+
+  it("binds each payment check to its own enum values", () => {
+    expectEnumCheck(payments, "payments_provider_check", paymentProviderValues());
+    expectEnumCheck(payments, "payments_status_check", paymentStatusValues());
+  });
+
+  it("binds each billing agreement check to its own enum values", () => {
+    expectEnumCheck(
+      billingAgreements,
+      "billing_agreements_provider_check",
+      paymentProviderValues(),
+    );
+    expectEnumCheck(billingAgreements, "billing_agreements_interval_check", billingIntervalValues);
+    expectEnumCheck(
+      billingAgreements,
+      "billing_agreements_status_check",
+      billingAgreementStatusValues,
+    );
   });
 });

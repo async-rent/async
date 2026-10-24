@@ -58,7 +58,8 @@ export type PaymentProviderValue = ReturnType<typeof paymentProviderValues>[numb
  *
  * The agreement is bound to the rental by a composite foreign key on
  * `(billing_agreement_id, rental_id)`, so a payment can never point at another
- * rental's agreement. The key is resolved lazily, because the tables import
+ * rental's agreement. Drizzle resolves a table's extra config lazily, so the
+ * object form of `foreignKey` is safe even though payment and billing import
  * each other.
  */
 export const payments = sqliteTable(
@@ -95,11 +96,11 @@ export const payments = sqliteTable(
       sql`length(${table.currency}) = 3 and ${table.currency} glob '[A-Z][A-Z][A-Z]'`,
     ),
     check("payments_amount_check", sql`${table.amount} >= 0`),
-    foreignKey(() => ({
+    foreignKey({
       name: "payments_billing_agreement_rental_fk",
       columns: [table.billingAgreementId, table.rentalId],
       foreignColumns: [billingAgreements.id, billingAgreements.rentalId],
-    }))
+    })
       .onDelete("restrict")
       .onUpdate("cascade"),
     uniqueIndex("payments_rental_id_billing_cycle_unique").on(table.rentalId, table.billingCycle),
@@ -111,6 +112,9 @@ export const payments = sqliteTable(
       table.provider,
       table.externalPaymentId,
     ),
+    // Child side of the composite agreement foreign key, so enforcing the key
+    // and agreement-scoped payment reads stay off a table scan.
+    index("payments_billing_agreement_id_idx").on(table.billingAgreementId),
     index("payments_status_idx").on(table.status),
   ],
 );

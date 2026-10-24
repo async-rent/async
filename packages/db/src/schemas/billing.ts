@@ -14,6 +14,20 @@ export const billingAgreementStatusValues = ["active", "paused", "cancelled", "c
 
 export type BillingAgreementStatusValue = (typeof billingAgreementStatusValues)[number];
 
+/**
+ * The statuses in which an agreement still bills its rental.
+ *
+ * The partial unique index below is derived from this list, so widening the
+ * billing status enum and choosing which statuses count as "live" can never
+ * drift apart.
+ */
+export const liveBillingAgreementStatusValues = [
+  "active",
+  "paused",
+] as const satisfies ReadonlyArray<BillingAgreementStatusValue>;
+
+export type LiveBillingAgreementStatusValue = (typeof liveBillingAgreementStatusValues)[number];
+
 /** Billing interval values, mirroring core's `billingIntervalSchema`. */
 export const billingIntervalValues = ["weekly"] as const;
 
@@ -69,9 +83,14 @@ export const billingAgreements = sqliteTable(
       sql`length(${table.currency}) = 3 and ${table.currency} glob '[A-Z][A-Z][A-Z]'`,
     ),
     // One live agreement per rental; cancelled and completed ones are history.
+    // The live statuses come from `liveBillingAgreementStatusValues`, not from
+    // a hand-written copy here.
     uniqueIndex("billing_agreements_rental_id_live_unique")
       .on(table.rentalId)
-      .where(sql`${table.status} in (${enumValuesSql(["active", "paused"])})`),
+      .where(sql`${table.status} in (${enumValuesSql(liveBillingAgreementStatusValues)})`),
+    // Serves a rental-scoped read regardless of the live-status filter, which
+    // the partial index above cannot stand in for.
+    index("billing_agreements_rental_id_idx").on(table.rentalId),
     // Parent key for the composite foreign key from `payments`.
     uniqueIndex("billing_agreements_id_rental_id_unique").on(table.id, table.rentalId),
     index("billing_agreements_status_next_charge_at_idx").on(table.status, table.nextChargeAt),
