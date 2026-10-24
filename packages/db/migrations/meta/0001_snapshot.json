@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a71c4523-de18-48b7-93e3-3b6e18600d4d",
+  "id": "052c5a8d-597c-445c-8bfd-7498f64f572c",
   "prevId": "d4a55909-18d4-4070-adf1-7937e932c610",
   "tables": {
     "billing_agreements": {
@@ -89,12 +89,21 @@
         }
       },
       "indexes": {
-        "billing_agreements_rental_id_idx": {
-          "name": "billing_agreements_rental_id_idx",
+        "billing_agreements_rental_id_live_unique": {
+          "name": "billing_agreements_rental_id_live_unique",
           "columns": [
             "rental_id"
           ],
-          "isUnique": false
+          "isUnique": true,
+          "where": "\"billing_agreements\".\"status\" in ('active', 'paused')"
+        },
+        "billing_agreements_id_rental_id_unique": {
+          "name": "billing_agreements_id_rental_id_unique",
+          "columns": [
+            "id",
+            "rental_id"
+          ],
+          "isUnique": true
         },
         "billing_agreements_status_next_charge_at_idx": {
           "name": "billing_agreements_status_next_charge_at_idx",
@@ -116,7 +125,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "cascade"
         }
       },
@@ -238,6 +247,19 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "cascade"
+        },
+        "cart_items_product_id_products_id_fk": {
+          "name": "cart_items_product_id_products_id_fk",
+          "tableFrom": "cart_items",
+          "tableTo": "products",
+          "columnsFrom": [
+            "product_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "cascade"
         }
       },
       "compositePrimaryKeys": {
@@ -286,8 +308,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "location_slug": {
-          "name": "location_slug",
+        "location_id": {
+          "name": "location_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -379,10 +401,10 @@
           ],
           "isUnique": false
         },
-        "carts_location_slug_idx": {
-          "name": "carts_location_slug_idx",
+        "carts_location_id_idx": {
+          "name": "carts_location_id_idx",
           "columns": [
-            "location_slug"
+            "location_id"
           ],
           "isUnique": false
         },
@@ -395,15 +417,15 @@
         }
       },
       "foreignKeys": {
-        "carts_location_slug_locations_slug_fk": {
-          "name": "carts_location_slug_locations_slug_fk",
+        "carts_location_id_locations_id_fk": {
+          "name": "carts_location_id_locations_id_fk",
           "tableFrom": "carts",
           "tableTo": "locations",
           "columnsFrom": [
-            "location_slug"
+            "location_id"
           ],
           "columnsTo": [
-            "slug"
+            "id"
           ],
           "onDelete": "restrict",
           "onUpdate": "cascade"
@@ -723,12 +745,21 @@
           ],
           "isUnique": true
         },
-        "payments_billing_agreement_id_idx": {
-          "name": "payments_billing_agreement_id_idx",
+        "payments_provider_external_order_id_unique": {
+          "name": "payments_provider_external_order_id_unique",
           "columns": [
-            "billing_agreement_id"
+            "provider",
+            "external_order_id"
           ],
-          "isUnique": false
+          "isUnique": true
+        },
+        "payments_provider_external_payment_id_unique": {
+          "name": "payments_provider_external_payment_id_unique",
+          "columns": [
+            "provider",
+            "external_payment_id"
+          ],
+          "isUnique": true
         },
         "payments_status_idx": {
           "name": "payments_status_idx",
@@ -752,15 +783,17 @@
           "onDelete": "restrict",
           "onUpdate": "cascade"
         },
-        "payments_billing_agreement_id_billing_agreements_id_fk": {
-          "name": "payments_billing_agreement_id_billing_agreements_id_fk",
+        "payments_billing_agreement_rental_fk": {
+          "name": "payments_billing_agreement_rental_fk",
           "tableFrom": "payments",
           "tableTo": "billing_agreements",
           "columnsFrom": [
-            "billing_agreement_id"
+            "billing_agreement_id",
+            "rental_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "rental_id"
           ],
           "onDelete": "restrict",
           "onUpdate": "cascade"
@@ -1353,6 +1386,19 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "cascade"
+        },
+        "rental_items_product_id_products_id_fk": {
+          "name": "rental_items_product_id_products_id_fk",
+          "tableFrom": "rental_items",
+          "tableTo": "products",
+          "columnsFrom": [
+            "product_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "cascade"
         }
       },
       "compositePrimaryKeys": {
@@ -1478,8 +1524,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "location_slug": {
-          "name": "location_slug",
+        "location_id": {
+          "name": "location_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1590,13 +1636,6 @@
           "autoincrement": false,
           "default": 0
         },
-        "billing_agreement_id": {
-          "name": "billing_agreement_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "payment_status_snapshot": {
           "name": "payment_status_snapshot",
           "type": "text",
@@ -1656,10 +1695,10 @@
           ],
           "isUnique": false
         },
-        "rentals_location_slug_idx": {
-          "name": "rentals_location_slug_idx",
+        "rentals_location_id_idx": {
+          "name": "rentals_location_id_idx",
           "columns": [
-            "location_slug"
+            "location_id"
           ],
           "isUnique": false
         },
@@ -1670,25 +1709,18 @@
             "created_at"
           ],
           "isUnique": false
-        },
-        "rentals_billing_agreement_id_idx": {
-          "name": "rentals_billing_agreement_id_idx",
-          "columns": [
-            "billing_agreement_id"
-          ],
-          "isUnique": false
         }
       },
       "foreignKeys": {
-        "rentals_location_slug_locations_slug_fk": {
-          "name": "rentals_location_slug_locations_slug_fk",
+        "rentals_location_id_locations_id_fk": {
+          "name": "rentals_location_id_locations_id_fk",
           "tableFrom": "rentals",
           "tableTo": "locations",
           "columnsFrom": [
-            "location_slug"
+            "location_id"
           ],
           "columnsTo": [
-            "slug"
+            "id"
           ],
           "onDelete": "restrict",
           "onUpdate": "cascade"

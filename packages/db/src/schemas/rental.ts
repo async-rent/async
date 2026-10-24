@@ -1,7 +1,13 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { fulfillmentStatusValues, paymentStatusValues, rentalStatusValues } from "./enums";
+import {
+  enumValuesSql,
+  fulfillmentStatusValues,
+  paymentStatusValues,
+  rentalStatusValues,
+} from "./enums";
 import { locations } from "./location";
+import { products } from "./product";
 import { timestamps } from "./timestamps";
 
 /**
@@ -12,9 +18,13 @@ import { timestamps } from "./timestamps";
  * (`YYYY-MM-DD`) and delivery window bounds are local `HH:MM` strings, matching
  * the domain schemas.
  *
- * `billingAgreementId` is intentionally an indexed column without a foreign
- * key: the real edge is `billing_agreements.rental_id -> rentals.id`, and a
- * second constraint would make the pair circular.
+ * The recurring agreement is not denormalized here: `billing_agreements.rental_id`
+ * is the single authoritative edge, and it is unique per live agreement, so a
+ * rental has at most one agreement that still bills. Core reads it from there
+ * when it fills the domain's `billingAgreementId`.
+ *
+ * The city is stored as `locations.id`, the same key `product_prices` uses, so
+ * every location reference in the schema points at a primary key.
  */
 export const rentals = sqliteTable(
   "rentals",
@@ -32,9 +42,9 @@ export const rentals = sqliteTable(
     addressPostcode: text("address_postcode"),
     addressCountryCode: text("address_country_code").notNull(),
     deliveryNotes: text("delivery_notes"),
-    locationSlug: text("location_slug")
+    locationId: text("location_id")
       .notNull()
-      .references(() => locations.slug, { onDelete: "restrict", onUpdate: "cascade" }),
+      .references(() => locations.id, { onDelete: "restrict", onUpdate: "cascade" }),
     currency: text("currency").notNull(),
     startDate: text("start_date").notNull(),
     endDate: text("end_date"),
@@ -49,7 +59,6 @@ export const rentals = sqliteTable(
     discount: integer("discount").notNull().default(0),
     totalDueToday: integer("total_due_today").notNull().default(0),
     recurringWeekly: integer("recurring_weekly").notNull().default(0),
-    billingAgreementId: text("billing_agreement_id"),
     paymentStatusSnapshot: text("payment_status_snapshot", { enum: paymentStatusValues }),
     termsAcceptedAt: integer("terms_accepted_at", { mode: "timestamp_ms" }),
     cancelledAt: integer("cancelled_at", { mode: "timestamp_ms" }),
@@ -57,17 +66,14 @@ export const rentals = sqliteTable(
     ...timestamps,
   },
   (table) => [
-    check(
-      "rentals_status_check",
-      sql`${table.status} in ('pending_payment', 'confirmed', 'active', 'completed', 'cancelled')`,
-    ),
+    check("rentals_status_check", sql`${table.status} in (${enumValuesSql(rentalStatusValues)})`),
     check(
       "rentals_fulfillment_status_check",
-      sql`${table.fulfillmentStatus} is null or ${table.fulfillmentStatus} in ('scheduled', 'in_transit', 'delivered', 'returned')`,
+      sql`${table.fulfillmentStatus} is null or ${table.fulfillmentStatus} in (${enumValuesSql(fulfillmentStatusValues)})`,
     ),
     check(
       "rentals_payment_status_snapshot_check",
-      sql`${table.paymentStatusSnapshot} is null or ${table.paymentStatusSnapshot} in ('pending', 'authorized', 'succeeded', 'failed', 'refunded')`,
+      sql`${table.paymentStatusSnapshot} is null or ${table.paymentStatusSnapshot} in (${enumValuesSql(paymentStatusValues)})`,
     ),
     check(
       "rentals_currency_check",
@@ -80,9 +86,8 @@ export const rentals = sqliteTable(
     check("rentals_total_due_today_check", sql`${table.totalDueToday} >= 0`),
     check("rentals_recurring_weekly_check", sql`${table.recurringWeekly} >= 0`),
     index("rentals_clerk_user_id_idx").on(table.clerkUserId),
-    index("rentals_location_slug_idx").on(table.locationSlug),
+    index("rentals_location_id_idx").on(table.locationId),
     index("rentals_status_created_at_idx").on(table.status, table.createdAt),
-    index("rentals_billing_agreement_id_idx").on(table.billingAgreementId),
   ],
 );
 
@@ -94,7 +99,9 @@ export const rentalItems = sqliteTable(
       .notNull()
       .references(() => rentals.id, { onDelete: "cascade", onUpdate: "cascade" }),
     position: integer("position").notNull(),
-    productId: text("product_id").notNull(),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict", onUpdate: "cascade" }),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
     imageUrl: text("image_url"),

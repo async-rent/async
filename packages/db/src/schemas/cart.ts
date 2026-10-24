@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { locations } from "./location";
+import { products } from "./product";
 import { timestamps } from "./timestamps";
 
 /**
@@ -10,15 +11,18 @@ import { timestamps } from "./timestamps";
  * are rows in `cart_items` and the summary is flattened onto the cart row.
  * Amounts are minor units in `currency`, matching the domain's `amountSchema`.
  * `expiresAt` marks when the price snapshot stops being honoured.
+ *
+ * The city is stored as `locations.id`, the same key `product_prices` uses, so
+ * every location reference in the schema points at a primary key.
  */
 export const carts = sqliteTable(
   "carts",
   {
     id: text("id").primaryKey(),
     customerId: text("customer_id"),
-    locationSlug: text("location_slug")
+    locationId: text("location_id")
       .notNull()
-      .references(() => locations.slug, { onDelete: "restrict", onUpdate: "cascade" }),
+      .references(() => locations.id, { onDelete: "restrict", onUpdate: "cascade" }),
     currency: text("currency").notNull(),
     weeklySubtotal: integer("weekly_subtotal").notNull().default(0),
     deposit: integer("deposit").notNull().default(0),
@@ -41,7 +45,7 @@ export const carts = sqliteTable(
     check("carts_total_due_today_check", sql`${table.totalDueToday} >= 0`),
     check("carts_recurring_weekly_check", sql`${table.recurringWeekly} >= 0`),
     index("carts_customer_id_idx").on(table.customerId),
-    index("carts_location_slug_idx").on(table.locationSlug),
+    index("carts_location_id_idx").on(table.locationId),
     index("carts_expires_at_idx").on(table.expiresAt),
   ],
 );
@@ -54,7 +58,9 @@ export const cartItems = sqliteTable(
       .notNull()
       .references(() => carts.id, { onDelete: "cascade", onUpdate: "cascade" }),
     position: integer("position").notNull(),
-    productId: text("product_id").notNull(),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict", onUpdate: "cascade" }),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
     imageUrl: text("image_url"),

@@ -10,14 +10,15 @@ CREATE TABLE `billing_agreements` (
 	`cancelled_at` integer,
 	`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,
 	`updated_at` integer,
-	FOREIGN KEY (`rental_id`) REFERENCES `rentals`(`id`) ON UPDATE cascade ON DELETE cascade,
+	FOREIGN KEY (`rental_id`) REFERENCES `rentals`(`id`) ON UPDATE cascade ON DELETE restrict,
 	CONSTRAINT "billing_agreements_provider_check" CHECK("billing_agreements"."provider" in ('paypal')),
 	CONSTRAINT "billing_agreements_interval_check" CHECK("billing_agreements"."interval" in ('weekly')),
 	CONSTRAINT "billing_agreements_status_check" CHECK("billing_agreements"."status" in ('active', 'paused', 'cancelled', 'completed')),
 	CONSTRAINT "billing_agreements_currency_check" CHECK(length("billing_agreements"."currency") = 3 and "billing_agreements"."currency" glob '[A-Z][A-Z][A-Z]')
 );
 --> statement-breakpoint
-CREATE INDEX `billing_agreements_rental_id_idx` ON `billing_agreements` (`rental_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `billing_agreements_rental_id_live_unique` ON `billing_agreements` (`rental_id`) WHERE "billing_agreements"."status" in ('active', 'paused');--> statement-breakpoint
+CREATE UNIQUE INDEX `billing_agreements_id_rental_id_unique` ON `billing_agreements` (`id`,`rental_id`);--> statement-breakpoint
 CREATE INDEX `billing_agreements_status_next_charge_at_idx` ON `billing_agreements` (`status`,`next_charge_at`);--> statement-breakpoint
 CREATE TABLE `cart_items` (
 	`cart_id` text NOT NULL,
@@ -32,6 +33,7 @@ CREATE TABLE `cart_items` (
 	`deposit` integer,
 	PRIMARY KEY(`cart_id`, `position`),
 	FOREIGN KEY (`cart_id`) REFERENCES `carts`(`id`) ON UPDATE cascade ON DELETE cascade,
+	FOREIGN KEY (`product_id`) REFERENCES `products`(`id`) ON UPDATE cascade ON DELETE restrict,
 	CONSTRAINT "cart_items_position_check" CHECK("cart_items"."position" >= 0),
 	CONSTRAINT "cart_items_quantity_check" CHECK("cart_items"."quantity" > 0),
 	CONSTRAINT "cart_items_weekly_price_check" CHECK("cart_items"."weekly_price" >= 0),
@@ -42,7 +44,7 @@ CREATE INDEX `cart_items_product_id_idx` ON `cart_items` (`product_id`);--> stat
 CREATE TABLE `carts` (
 	`id` text PRIMARY KEY NOT NULL,
 	`customer_id` text,
-	`location_slug` text NOT NULL,
+	`location_id` text NOT NULL,
 	`currency` text NOT NULL,
 	`weekly_subtotal` integer DEFAULT 0 NOT NULL,
 	`deposit` integer DEFAULT 0 NOT NULL,
@@ -53,7 +55,7 @@ CREATE TABLE `carts` (
 	`expires_at` integer,
 	`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,
 	`updated_at` integer,
-	FOREIGN KEY (`location_slug`) REFERENCES `locations`(`slug`) ON UPDATE cascade ON DELETE restrict,
+	FOREIGN KEY (`location_id`) REFERENCES `locations`(`id`) ON UPDATE cascade ON DELETE restrict,
 	CONSTRAINT "carts_currency_check" CHECK(length("carts"."currency") = 3 and "carts"."currency" glob '[A-Z][A-Z][A-Z]'),
 	CONSTRAINT "carts_weekly_subtotal_check" CHECK("carts"."weekly_subtotal" >= 0),
 	CONSTRAINT "carts_deposit_check" CHECK("carts"."deposit" >= 0),
@@ -64,7 +66,7 @@ CREATE TABLE `carts` (
 );
 --> statement-breakpoint
 CREATE INDEX `carts_customer_id_idx` ON `carts` (`customer_id`);--> statement-breakpoint
-CREATE INDEX `carts_location_slug_idx` ON `carts` (`location_slug`);--> statement-breakpoint
+CREATE INDEX `carts_location_id_idx` ON `carts` (`location_id`);--> statement-breakpoint
 CREATE INDEX `carts_expires_at_idx` ON `carts` (`expires_at`);--> statement-breakpoint
 CREATE TABLE `payments` (
 	`id` text PRIMARY KEY NOT NULL,
@@ -82,7 +84,7 @@ CREATE TABLE `payments` (
 	`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,
 	`updated_at` integer,
 	FOREIGN KEY (`rental_id`) REFERENCES `rentals`(`id`) ON UPDATE cascade ON DELETE restrict,
-	FOREIGN KEY (`billing_agreement_id`) REFERENCES `billing_agreements`(`id`) ON UPDATE cascade ON DELETE restrict,
+	FOREIGN KEY (`billing_agreement_id`,`rental_id`) REFERENCES `billing_agreements`(`id`,`rental_id`) ON UPDATE cascade ON DELETE restrict,
 	CONSTRAINT "payments_billing_cycle_check" CHECK("payments"."billing_cycle" > 0),
 	CONSTRAINT "payments_provider_check" CHECK("payments"."provider" in ('paypal')),
 	CONSTRAINT "payments_status_check" CHECK("payments"."status" in ('pending', 'authorized', 'succeeded', 'failed', 'refunded')),
@@ -91,7 +93,8 @@ CREATE TABLE `payments` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `payments_rental_id_billing_cycle_unique` ON `payments` (`rental_id`,`billing_cycle`);--> statement-breakpoint
-CREATE INDEX `payments_billing_agreement_id_idx` ON `payments` (`billing_agreement_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `payments_provider_external_order_id_unique` ON `payments` (`provider`,`external_order_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `payments_provider_external_payment_id_unique` ON `payments` (`provider`,`external_payment_id`);--> statement-breakpoint
 CREATE INDEX `payments_status_idx` ON `payments` (`status`);--> statement-breakpoint
 CREATE TABLE `rental_items` (
 	`rental_id` text NOT NULL,
@@ -106,6 +109,7 @@ CREATE TABLE `rental_items` (
 	`deposit` integer,
 	PRIMARY KEY(`rental_id`, `position`),
 	FOREIGN KEY (`rental_id`) REFERENCES `rentals`(`id`) ON UPDATE cascade ON DELETE cascade,
+	FOREIGN KEY (`product_id`) REFERENCES `products`(`id`) ON UPDATE cascade ON DELETE restrict,
 	CONSTRAINT "rental_items_position_check" CHECK("rental_items"."position" >= 0),
 	CONSTRAINT "rental_items_quantity_check" CHECK("rental_items"."quantity" > 0),
 	CONSTRAINT "rental_items_weekly_price_check" CHECK("rental_items"."weekly_price" >= 0),
@@ -127,7 +131,7 @@ CREATE TABLE `rentals` (
 	`address_postcode` text,
 	`address_country_code` text NOT NULL,
 	`delivery_notes` text,
-	`location_slug` text NOT NULL,
+	`location_id` text NOT NULL,
 	`currency` text NOT NULL,
 	`start_date` text NOT NULL,
 	`end_date` text,
@@ -142,14 +146,13 @@ CREATE TABLE `rentals` (
 	`discount` integer DEFAULT 0 NOT NULL,
 	`total_due_today` integer DEFAULT 0 NOT NULL,
 	`recurring_weekly` integer DEFAULT 0 NOT NULL,
-	`billing_agreement_id` text,
 	`payment_status_snapshot` text,
 	`terms_accepted_at` integer,
 	`cancelled_at` integer,
 	`notes` text,
 	`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,
 	`updated_at` integer,
-	FOREIGN KEY (`location_slug`) REFERENCES `locations`(`slug`) ON UPDATE cascade ON DELETE restrict,
+	FOREIGN KEY (`location_id`) REFERENCES `locations`(`id`) ON UPDATE cascade ON DELETE restrict,
 	CONSTRAINT "rentals_status_check" CHECK("rentals"."status" in ('pending_payment', 'confirmed', 'active', 'completed', 'cancelled')),
 	CONSTRAINT "rentals_fulfillment_status_check" CHECK("rentals"."fulfillment_status" is null or "rentals"."fulfillment_status" in ('scheduled', 'in_transit', 'delivered', 'returned')),
 	CONSTRAINT "rentals_payment_status_snapshot_check" CHECK("rentals"."payment_status_snapshot" is null or "rentals"."payment_status_snapshot" in ('pending', 'authorized', 'succeeded', 'failed', 'refunded')),
@@ -164,6 +167,5 @@ CREATE TABLE `rentals` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `rentals_number_unique` ON `rentals` (`number`);--> statement-breakpoint
 CREATE INDEX `rentals_clerk_user_id_idx` ON `rentals` (`clerk_user_id`);--> statement-breakpoint
-CREATE INDEX `rentals_location_slug_idx` ON `rentals` (`location_slug`);--> statement-breakpoint
-CREATE INDEX `rentals_status_created_at_idx` ON `rentals` (`status`,`created_at`);--> statement-breakpoint
-CREATE INDEX `rentals_billing_agreement_id_idx` ON `rentals` (`billing_agreement_id`);
+CREATE INDEX `rentals_location_id_idx` ON `rentals` (`location_id`);--> statement-breakpoint
+CREATE INDEX `rentals_status_created_at_idx` ON `rentals` (`status`,`created_at`);
