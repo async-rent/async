@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Wrangler local state (D1, KV, caches)
+.wrangler
+
 # dotenv environment variable files
 .env
 .env.*
