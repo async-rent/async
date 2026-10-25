@@ -36,9 +36,10 @@ cities, nine gear categories and 25 curated monis.rent products (photos, specs,
 highlights and per-city weekly prices). Da Nang has no published price sheet
 yet, so its rows mirror another city — see the file header.
 
-The photos are downloaded to `products/images/` and referenced by their site path
-(`/products/images/<sequence>.jpg`); they are uploaded to the R2 bucket from
-there, so only the path prefix changes later.
+The photos live in the `async-rent-products` R2 bucket, bound as `PRODUCTS` in
+the root wrangler config and stored under `products/images/`. The seed
+references them by their site path (`/products/images/<sequence>.jpg`), so only
+the path prefix changes when they move to another host.
 
 It bypasses migration tracking on purpose, so apply it with `wrangler d1 execute`
 after the schema is up to date:

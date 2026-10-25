@@ -13,6 +13,13 @@
       "migrations_dir": "packages/db/migrations",
     },
   ],
+  // Product photos live in R2 and are served under /products/images/.
+  "r2_buckets": [
+    {
+      "binding": "PRODUCTS",
+      "bucket_name": "async-rent-products",
+    },
+  ],
   "env": {
     "dev": {
       "name": "async-rent-dev",
@@ -24,6 +31,12 @@
           "migrations_dir": "packages/db/migrations",
         },
       ],
+      "r2_buckets": [
+        {
+          "binding": "PRODUCTS",
+          "bucket_name": "async-rent-products",
+        },
+      ],
     },
     "staging": {
       "name": "async-rent-staging",
@@ -33,6 +46,12 @@
           "database_name": "async-rent_staging",
           "database_id": "129d6859-a153-4f65-bd7a-b69a142fd426",
           "migrations_dir": "packages/db/migrations",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PRODUCTS",
+          "bucket_name": "async-rent-products",
         },
       ],
     },
