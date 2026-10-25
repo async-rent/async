@@ -11,14 +11,15 @@
 -- migrations (#23) against the one shared D1 database via the root wrangler
 -- config:
 --
---   vpx wrangler d1 execute async-rent --local  --file=packages/db/seed.sql
---   vpx wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
+--   vp exec wrangler d1 execute async-rent --local  --file=packages/db/seed.sql
+--   vp exec wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
 --
 -- The script is idempotent and safe to re-run once carts or rentals exist:
 -- parent rows are upserted (never deleted, so `ON DELETE RESTRICT` from
 -- carts, rentals, products and categories never fires) and child rows are
--- cleared scoped to the `prd_` ids this file owns before re-inserting. It
--- never touches carts, rentals, payments or billing agreements.
+-- cleared scoped to the exact product/location ids this file owns before
+-- re-inserting. It never touches carts, rentals, payments or billing
+-- agreements.
 --
 -- No explicit BEGIN/COMMIT: D1's remote import path runs the whole file in
 -- one transaction, and locally wrangler replays it through `db.batch()`,
@@ -26,11 +27,75 @@
 -- remote import. Photo paths are root-relative placeholders until the R2
 -- public-base convention is pinned down before launch.
 
--- Child rows are regenerated wholesale, scoped to the ids this seed owns.
-DELETE FROM product_prices     WHERE product_id LIKE 'prd\_%' ESCAPE '\';
-DELETE FROM product_specs      WHERE product_id LIKE 'prd\_%' ESCAPE '\';
-DELETE FROM product_highlights WHERE product_id LIKE 'prd\_%' ESCAPE '\';
-DELETE FROM product_images     WHERE product_id LIKE 'prd\_%' ESCAPE '\';
+-- Child rows are regenerated wholesale, scoped to the exact ids this seed
+-- owns — the same products the INSERT below writes, and only in the four
+-- launch cities — so rows belonging to products or cities added outside
+-- this seed survive a re-run.
+WITH owned(id) AS (
+  VALUES
+    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
+    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
+    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
+    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
+    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
+    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
+    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
+    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
+    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
+    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
+    ('prd_setup_studio')
+)
+DELETE FROM product_prices
+WHERE product_id IN (SELECT id FROM owned)
+  AND location_id IN ('loc_bali', 'loc_chiang_mai', 'loc_da_nang', 'loc_lisbon');
+
+WITH owned(id) AS (
+  VALUES
+    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
+    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
+    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
+    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
+    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
+    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
+    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
+    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
+    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
+    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
+    ('prd_setup_studio')
+)
+DELETE FROM product_specs WHERE product_id IN (SELECT id FROM owned);
+
+WITH owned(id) AS (
+  VALUES
+    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
+    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
+    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
+    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
+    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
+    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
+    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
+    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
+    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
+    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
+    ('prd_setup_studio')
+)
+DELETE FROM product_highlights WHERE product_id IN (SELECT id FROM owned);
+
+WITH owned(id) AS (
+  VALUES
+    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
+    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
+    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
+    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
+    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
+    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
+    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
+    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
+    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
+    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
+    ('prd_setup_studio')
+)
+DELETE FROM product_images WHERE product_id IN (SELECT id FROM owned);
 
 -- ---------------------------------------------------------------------------
 -- Locations: the four launch cities. Upserted, never deleted — carts hold
@@ -402,8 +467,9 @@ WITH bases(product_id, weekly, deposit, stock) AS (
     ('prd_power_strip_727',       300,  2000, 8),
     ('prd_laptop_riser',          200,  2000, 8),
     ('prd_setup_full',           2500, 40000, 2),
-    -- Focus setup: $15 under the sum of its parts (desk + keyboard + mouse =
-    -- $16 base), matching the discount the full and studio setups give.
+    -- Focus setup: $1 under the sum of its parts (desk + keyboard + mouse =
+    -- $16 base), so every setup stays cheaper than booking its pieces
+    -- separately, like the full and studio setups.
     ('prd_setup_focus',          1500, 25000, 2),
     ('prd_setup_studio',         2100, 35000, 2)
 ),
