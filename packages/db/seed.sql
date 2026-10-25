@@ -15,87 +15,20 @@
 --   vp exec wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
 --
 -- The script is idempotent and safe to re-run once carts or rentals exist:
--- parent rows are upserted (never deleted, so `ON DELETE RESTRICT` from
--- carts, rentals, products and categories never fires) and child rows are
--- cleared scoped to the exact product/location ids this file owns before
--- re-inserting. It never touches carts, rentals, payments or billing
--- agreements.
+-- The script is idempotent and safe to re-run once carts or rentals exist:
+-- every row it writes — parents and children alike — is upserted, never
+-- deleted, so `ON DELETE RESTRICT` foreign keys (carts, rentals, products,
+-- categories) never fire, and rows added outside this seed survive a
+-- re-run untouched. The one caveat: if a row is retracted *from this file*,
+-- its stale copy lingers in the database — clear the affected table or the
+-- database before re-seeding in that case. It never touches carts,
+-- rentals, payments or billing agreements.
 --
 -- No explicit BEGIN/COMMIT: D1's remote import path runs the whole file in
 -- one transaction, and locally wrangler replays it through `db.batch()`,
 -- which is transactional too — an explicit wrapper would only break the
 -- remote import. Photo paths are root-relative placeholders until the R2
 -- public-base convention is pinned down before launch.
-
--- Child rows are regenerated wholesale, scoped to the exact ids this seed
--- owns — the same products the INSERT below writes, and only in the four
--- launch cities — so rows belonging to products or cities added outside
--- this seed survive a re-run.
-WITH owned(id) AS (
-  VALUES
-    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
-    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
-    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
-    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
-    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
-    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
-    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
-    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
-    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
-    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
-    ('prd_setup_studio')
-)
-DELETE FROM product_prices
-WHERE product_id IN (SELECT id FROM owned)
-  AND location_id IN ('loc_bali', 'loc_chiang_mai', 'loc_da_nang', 'loc_lisbon');
-
-WITH owned(id) AS (
-  VALUES
-    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
-    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
-    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
-    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
-    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
-    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
-    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
-    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
-    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
-    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
-    ('prd_setup_studio')
-)
-DELETE FROM product_specs WHERE product_id IN (SELECT id FROM owned);
-
-WITH owned(id) AS (
-  VALUES
-    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
-    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
-    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
-    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
-    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
-    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
-    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
-    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
-    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
-    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
-    ('prd_setup_studio')
-)
-DELETE FROM product_highlights WHERE product_id IN (SELECT id FROM owned);
-
-WITH owned(id) AS (
-  VALUES
-    ('prd_smartdesk_pro'),        ('prd_smartdesk_compact'),  ('prd_oak_writing_desk'),
-    ('prd_corner_l_desk'),        ('prd_ergonomic_task_chair'),('prd_lumbar_pro_chair'),
-    ('prd_light_travel_chair'),   ('prd_saddle_stool'),       ('prd_kneeling_chair'),
-    ('prd_ultrasharp_27_4k'),     ('prd_studio_display_27'),  ('prd_portable_15_oled'),
-    ('prd_ultrawide_34'),         ('prd_standard_24'),        ('prd_27_1440_ips'),
-    ('prd_arc_floor_lamp'),       ('prd_desk_lamp'),          ('prd_ring_light_12'),
-    ('prd_led_strip_light'),      ('prd_clip_reading_light'), ('prd_smart_bulb_kit'),
-    ('prd_low_profile_keyboard'), ('prd_mx_master_3s'),       ('prd_usb_c_hub'),
-    ('prd_monitor_riser'),        ('prd_studio_webcam_4k'),   ('prd_power_strip_727'),
-    ('prd_laptop_riser'),         ('prd_setup_full'),         ('prd_setup_focus'),
-    ('prd_setup_studio')
-)
-DELETE FROM product_images WHERE product_id IN (SELECT id FROM owned);
 
 -- ---------------------------------------------------------------------------
 -- Locations: the four launch cities. Upserted, never deleted — carts hold
@@ -227,7 +160,10 @@ INSERT INTO product_images (product_id, position, url, alt) VALUES
   ('prd_laptop_riser',        0, '/products/laptop-riser-1.jpg',         'Laptop Riser holding a laptop'),
   ('prd_setup_full',          0, '/products/setup-full-1.jpg',           'The full setup in a villa bedroom'),
   ('prd_setup_focus',         0, '/products/setup-focus-1.jpg',          'The focus setup by a window'),
-  ('prd_setup_studio',        0, '/products/setup-studio-1.jpg',         'The studio setup with display and webcam');
+  ('prd_setup_studio',        0, '/products/setup-studio-1.jpg',         'The studio setup with display and webcam')
+ON CONFLICT (product_id, position) DO UPDATE SET
+  url = excluded.url,
+  alt = excluded.alt;
 
 -- ---------------------------------------------------------------------------
 -- Marketing highlights, in display order.
@@ -326,7 +262,9 @@ INSERT INTO product_highlights (product_id, position, value) VALUES
   ('prd_setup_focus',          2, 'Working by the first coffee'),
   ('prd_setup_studio',         0, 'Studio Display 27" · Webcam · Hub · Riser'),
   ('prd_setup_studio',         1, 'Camera-first kit for creators'),
-  ('prd_setup_studio',         2, 'Light it up and go live');
+  ('prd_setup_studio',         2, 'Light it up and go live')
+ON CONFLICT (product_id, position) DO UPDATE SET
+  value = excluded.value;
 
 -- ---------------------------------------------------------------------------
 -- Specifications, in display order.
@@ -425,7 +363,10 @@ INSERT INTO product_specs (product_id, position, label, value) VALUES
   ('prd_setup_focus',          2, 'Swap',        'Chair upgrade available'),
   ('prd_setup_studio',         0, 'Includes',    'Studio Display 27", Studio Webcam 4K, USB-C Hub, Monitor Riser'),
   ('prd_setup_studio',         1, 'Delivery',    'Assembled within 24 h'),
-  ('prd_setup_studio',         2, 'Swap',        'Desk add-on available');
+  ('prd_setup_studio',         2, 'Swap',        'Desk add-on available')
+ON CONFLICT (product_id, position) DO UPDATE SET
+  label = excluded.label,
+  value = excluded.value;
 
 -- ---------------------------------------------------------------------------
 -- Weekly prices per city.
@@ -479,6 +420,7 @@ cities(slug, factor, delivery) AS (
     ('chiang-mai', 0.9, 1000),
     ('da-nang',    0.9, 1000),
     ('lisbon',     1.1, 1500)
+
 )
 INSERT INTO product_prices (product_id, location_id, currency, weekly_price, deposit, delivery_fee, stock, created_at)
 SELECT
@@ -492,4 +434,11 @@ SELECT
   unixepoch() * 1000
 FROM bases b
 CROSS JOIN cities c
-JOIN locations l ON l.slug = c.slug;
+JOIN locations l ON l.slug = c.slug
+ON CONFLICT (product_id, location_id) DO UPDATE SET
+  currency     = excluded.currency,
+  weekly_price = excluded.weekly_price,
+  deposit      = excluded.deposit,
+  delivery_fee = excluded.delivery_fee,
+  stock        = excluded.stock,
+  updated_at   = unixepoch() * 1000;
