@@ -15,7 +15,6 @@
 --   vp exec wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
 --
 -- The script is idempotent and safe to re-run once carts or rentals exist:
--- The script is idempotent and safe to re-run once carts or rentals exist:
 -- every row it writes — parents and children alike — is upserted, never
 -- deleted, so `ON DELETE RESTRICT` foreign keys (carts, rentals, products,
 -- categories) never fire, and rows added outside this seed survive a
@@ -420,7 +419,6 @@ cities(slug, factor, delivery) AS (
     ('chiang-mai', 0.9, 1000),
     ('da-nang',    0.9, 1000),
     ('lisbon',     1.1, 1500)
-
 )
 INSERT INTO product_prices (product_id, location_id, currency, weekly_price, deposit, delivery_fee, stock, created_at)
 SELECT
@@ -435,6 +433,7 @@ SELECT
 FROM bases b
 CROSS JOIN cities c
 JOIN locations l ON l.slug = c.slug
+WHERE true
 ON CONFLICT (product_id, location_id) DO UPDATE SET
   currency     = excluded.currency,
   weekly_price = excluded.weekly_price,
