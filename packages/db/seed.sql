@@ -1,8 +1,9 @@
 -- Seed data for the Async catalog (issue #5).
 --
--- Populates the four launch cities, the gear categories, 25 products plus the
--- three ready-made setups shown in the Storefront design (full / focus /
--- studio), with real specs, highlights, photos and weekly prices per city.
+-- Populates the four launch cities, the gear categories, 28 gear products
+-- plus the three ready-made setups shown in the Storefront design (full /
+-- focus / studio) — 31 product rows in total — with real specs, highlights,
+-- photos and 124 weekly per-city prices.
 --
 -- Amounts are minor units (cents, USD), matching `product_prices`.
 --
@@ -10,37 +11,51 @@
 -- migrations (#23) against the one shared D1 database via the root wrangler
 -- config:
 --
---   npx wrangler d1 execute async-rent --local  --file=packages/db/seed.sql
---   npx wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
+--   vpx wrangler d1 execute async-rent --local  --file=packages/db/seed.sql
+--   vpx wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
 --
--- The script is idempotent: it clears catalog rows (child-first) before
--- inserting. It never touches carts, rentals, payments or billing agreements.
+-- The script is idempotent and safe to re-run once carts or rentals exist:
+-- parent rows are upserted (never deleted, so `ON DELETE RESTRICT` from
+-- carts, rentals, products and categories never fires) and child rows are
+-- cleared scoped to the `prd_` ids this file owns before re-inserting. It
+-- never touches carts, rentals, payments or billing agreements.
+--
+-- No explicit BEGIN/COMMIT: D1's remote import path runs the whole file in
+-- one transaction, and locally wrangler replays it through `db.batch()`,
+-- which is transactional too — an explicit wrapper would only break the
+-- remote import. Photo paths are root-relative placeholders until the R2
+-- public-base convention is pinned down before launch.
 
-PRAGMA foreign_keys = ON;
-
-BEGIN TRANSACTION;
-
-DELETE FROM product_prices;
-DELETE FROM product_specs;
-DELETE FROM product_highlights;
-DELETE FROM product_images;
-DELETE FROM products;
-DELETE FROM categories;
-DELETE FROM locations;
+-- Child rows are regenerated wholesale, scoped to the ids this seed owns.
+DELETE FROM product_prices     WHERE product_id LIKE 'prd\_%' ESCAPE '\';
+DELETE FROM product_specs      WHERE product_id LIKE 'prd\_%' ESCAPE '\';
+DELETE FROM product_highlights WHERE product_id LIKE 'prd\_%' ESCAPE '\';
+DELETE FROM product_images     WHERE product_id LIKE 'prd\_%' ESCAPE '\';
 
 -- ---------------------------------------------------------------------------
--- Locations: the four launch cities.
+-- Locations: the four launch cities. Upserted, never deleted — carts hold
+-- `ON DELETE RESTRICT` foreign keys to locations.
 -- ---------------------------------------------------------------------------
 
 INSERT INTO locations (id, slug, name, country, timezone, description, status) VALUES
   ('loc_bali',       'bali',       'Bali',       'Indonesia', 'Asia/Makassar',     'Canggu and Ubud workspaces a scooter ride from the beach.',        'active'),
   ('loc_chiang_mai', 'chiang-mai', 'Chiang Mai', 'Thailand',  'Asia/Chiang_Mai',   'Nimman and Old City desks with mountain air and fast fiber.',      'active'),
   ('loc_da_nang',    'da-nang',    'Da Nang',    'Vietnam',   'Asia/Ho_Chi_Minh',  'Beachside setups between the Han River and My Khe beach.',         'active'),
-  ('loc_lisbon',     'lisbon',     'Lisbon',     'Portugal',  'Europe/Lisbon',     'Alfama to Parque das Nações setups with Atlantic light.',          'active');
+  ('loc_lisbon',     'lisbon',     'Lisbon',     'Portugal',  'Europe/Lisbon',     'Alfama to Parque das Nações setups with Atlantic light.',          'active')
+ON CONFLICT (id) DO UPDATE SET
+  slug        = excluded.slug,
+  name        = excluded.name,
+  country     = excluded.country,
+  timezone    = excluded.timezone,
+  description = excluded.description,
+  status      = excluded.status,
+  updated_at  = unixepoch() * 1000;
 
 -- ---------------------------------------------------------------------------
 -- Categories. Counts match the storefront design: 4 desks, 5 chairs,
--- 6 monitors, 6 lighting, 7 accessories — 25 products — plus 3 setups.
+-- 6 monitors, 6 lighting, 7 accessories — 28 products — plus 3 setups.
+-- Upserted, never deleted — products hold `ON DELETE RESTRICT` foreign keys
+-- to categories.
 -- ---------------------------------------------------------------------------
 
 INSERT INTO categories (id, slug, name, description, sort_order) VALUES
@@ -49,10 +64,17 @@ INSERT INTO categories (id, slug, name, description, sort_order) VALUES
   ('cat_chairs',      'chairs',      'Chairs',      'Ergonomic seating that survives eight-hour days.',        2),
   ('cat_monitors',    'monitors',    'Monitors',    '4K, ultrawide and portable displays with USB-C power.',   3),
   ('cat_lighting',    'lighting',    'Lighting',    'Key lights, lamps and ambience for calls and focus.',     4),
-  ('cat_accessories', 'accessories', 'Accessories', 'Keyboards, pointers, hubs and the small stuff that matters.', 5);
+  ('cat_accessories', 'accessories', 'Accessories', 'Keyboards, pointers, hubs and the small stuff that matters.', 5)
+ON CONFLICT (id) DO UPDATE SET
+  slug        = excluded.slug,
+  name        = excluded.name,
+  description = excluded.description,
+  sort_order  = excluded.sort_order,
+  updated_at  = unixepoch() * 1000;
 
 -- ---------------------------------------------------------------------------
--- Products.
+-- Products. Upserted, never deleted — cart_items and rental_items hold
+-- `ON DELETE RESTRICT` foreign keys to products.
 -- ---------------------------------------------------------------------------
 
 INSERT INTO products (id, slug, name, tagline, description, category_id, badge, featured, status) VALUES
@@ -92,7 +114,17 @@ INSERT INTO products (id, slug, name, tagline, description, category_id, badge, 
   -- Setups (3): the ready-made desks shown in the Storefront design.
   ('prd_setup_full',         'setup-full',           'The full setup',         'The whole desk, delivered and assembled',       'Everything you need on day one: the SmartDesk Pro, the Ergonomic Task Chair and the UltraSharp 27" 4K. We deliver, assemble and take the packaging with us.',                          'cat_setups',      'Best value',   1, 'active'),
   ('prd_setup_focus',        'setup-focus',          'The focus setup',        'Desk, keyboard and mouse, ready to write',      'A minimal kit for writers and developers: the SmartDesk Pro, the Low-Profile Keyboard and the MX Master 3S. Delivered and set up within 24 hours.',                                    'cat_setups',      NULL,           0, 'active'),
-  ('prd_setup_studio',       'setup-studio',         'The studio setup',       'Camera-first kit for people on video',          'For creators and calls-heavy weeks: the Studio Display 27", the Studio Webcam 4K, the USB-C Hub and the Monitor Riser. Light it up and go live.',                                      'cat_setups',      NULL,           0, 'active');
+  ('prd_setup_studio',       'setup-studio',         'The studio setup',       'Camera-first kit for people on video',          'For creators and calls-heavy weeks: the Studio Display 27", the Studio Webcam 4K, the USB-C Hub and the Monitor Riser. Light it up and go live.',                                      'cat_setups',      NULL,           0, 'active')
+ON CONFLICT (id) DO UPDATE SET
+  slug        = excluded.slug,
+  name        = excluded.name,
+  tagline     = excluded.tagline,
+  description = excluded.description,
+  category_id = excluded.category_id,
+  badge       = excluded.badge,
+  featured    = excluded.featured,
+  status      = excluded.status,
+  updated_at  = unixepoch() * 1000;
 
 -- ---------------------------------------------------------------------------
 -- Photos. One real photo per product, in display order. Paths point at the
@@ -370,7 +402,9 @@ WITH bases(product_id, weekly, deposit, stock) AS (
     ('prd_power_strip_727',       300,  2000, 8),
     ('prd_laptop_riser',          200,  2000, 8),
     ('prd_setup_full',           2500, 40000, 2),
-    ('prd_setup_focus',          1700, 25000, 2),
+    -- Focus setup: $15 under the sum of its parts (desk + keyboard + mouse =
+    -- $16 base), matching the discount the full and studio setups give.
+    ('prd_setup_focus',          1500, 25000, 2),
     ('prd_setup_studio',         2100, 35000, 2)
 ),
 cities(slug, factor, delivery) AS (
@@ -393,5 +427,3 @@ SELECT
 FROM bases b
 CROSS JOIN cities c
 JOIN locations l ON l.slug = c.slug;
-
-COMMIT;

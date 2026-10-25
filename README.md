@@ -30,6 +30,12 @@
 Apply the schema migrations, then seed the catalog:
 
 ```sh
-vpx wrangler d1 execute async-rent --local  --file=packages/db/seed.sql
-vpx wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
+vpx wrangler d1 migrations apply async-rent --local
+vpx wrangler d1 execute     async-rent --local  --file=packages/db/seed.sql
+
+vpx wrangler d1 migrations apply async-rent --remote
+vpx wrangler d1 execute     async-rent --remote --file=packages/db/seed.sql
 ```
+
+The seed is idempotent and safe to re-run — it upserts catalog rows and
+never touches carts, rentals, payments or billing agreements.
