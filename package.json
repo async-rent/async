@@ -9,7 +9,8 @@
     "prepare": "vp config"
   },
   "devDependencies": {
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "wrangler": "catalog:"
   },
   "devEngines": {
     "packageManager": {
