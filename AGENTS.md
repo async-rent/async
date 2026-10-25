@@ -68,5 +68,8 @@ Dependent work ships as a stack — never one big PR, never a branch cut by hand
 - Never hand-edit a PR's base branch, `git push --force` a stack branch, or merge a layer out of order. `gh stack` retargets bases, force-pushes with lease, and merges bottom-up — use `gh stack push`, not `git push -f`.
 - Schema migrations: when a lower layer changes the schema, regenerate its migration there, then rebase and regenerate the upper layer's migration against the new baseline (drop the stale `NNNN_*.sql` and its `meta/` journal entry first). Rebase fixes history, not SQL.
 - `gh stack add -A` stages untracked files. Name the branch and use `-u`, so stray notes never land in a layer.
+- **Title**: `type(scope): action` — user-focused, present tense, Conventional Commits format.
+  - Good: `docs: protect client funds from unauthorized contractor custody`
+  - Bad: `Add FUND_HANDLING.md`
 
 <!--ASYNC STACKED PRS END-->
