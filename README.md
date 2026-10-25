@@ -24,3 +24,12 @@
 | **The landed freelancer** (primary)           | Just arrived in Canggu, Airbnb has a dining-table "desk", laptop neck by day 3, client call Monday | Get an ergonomic, inspiring workspace within 24h — without buying gear they'll abandon in 2 months   | $80–300/mo                                                            |
 | **The agent user** (AI-native)                | Lives in Claude/Cursor/ChatGPT; delegates logistics to agents                                      | "Just handle my setup" — search, decide, book, pay, track delivery inside their existing AI workflow | Same, with higher conversion & AOV (agent upsells insurance, add-ons) |
 | **The gear owner / local shop** (supply side) | Coworking space, villa manager, rental shop with idle inventory                                    | Monetize idle stock with zero storefront effort                                                      | Wants ~80% of rent (monis's marketplace rate validates this)          |
+
+## Seeds
+
+Apply the schema migrations, then seed the catalog:
+
+```sh
+vpx wrangler d1 execute async-rent --local  --file=packages/db/seed.sql
+vpx wrangler d1 execute async-rent --remote --file=packages/db/seed.sql
+```
