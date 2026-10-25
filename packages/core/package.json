@@ -12,6 +12,7 @@
     "check": "vp check"
   },
   "dependencies": {
+    "@async-rent/db": "workspace:*",
     "drizzle-orm": "catalog:",
     "zod": "catalog:"
   },
