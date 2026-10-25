@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { enumValuesSql } from "../utils/enum";
 import { paymentStatusValues } from "./payment";
+import type { PaymentStatusValue } from "./payment";
 import { locations } from "./location";
 import { products } from "./product";
 import { timestamps } from "./timestamps";
@@ -53,7 +54,7 @@ export const rentals = sqliteTable(
   {
     id: text("id").primaryKey(),
     number: text("number").notNull().unique(),
-    clerkUserId: text("clerk_user_id"),
+    userId: text("user_id"),
     contactName: text("contact_name").notNull(),
     contactEmail: text("contact_email").notNull(),
     contactWhatsapp: text("contact_whatsapp"),
@@ -81,7 +82,7 @@ export const rentals = sqliteTable(
     discount: integer("discount").notNull().default(0),
     totalDueToday: integer("total_due_today").notNull().default(0),
     recurringWeekly: integer("recurring_weekly").notNull().default(0),
-    paymentStatusSnapshot: text("payment_status_snapshot", { enum: paymentStatusValues() }),
+    paymentStatusSnapshot: text("payment_status_snapshot").$type<PaymentStatusValue>(),
     termsAcceptedAt: integer("terms_accepted_at", { mode: "timestamp_ms" }),
     cancelledAt: integer("cancelled_at", { mode: "timestamp_ms" }),
     notes: text("notes"),
@@ -95,7 +96,7 @@ export const rentals = sqliteTable(
     ),
     check(
       "rentals_payment_status_snapshot_check",
-      sql`${table.paymentStatusSnapshot} is null or ${table.paymentStatusSnapshot} in (${enumValuesSql(paymentStatusValues())})`,
+      sql`${table.paymentStatusSnapshot} is null or ${table.paymentStatusSnapshot} in (${enumValuesSql(paymentStatusValues)})`,
     ),
     check(
       "rentals_currency_check",
@@ -107,7 +108,7 @@ export const rentals = sqliteTable(
     check("rentals_discount_check", sql`${table.discount} >= 0`),
     check("rentals_total_due_today_check", sql`${table.totalDueToday} >= 0`),
     check("rentals_recurring_weekly_check", sql`${table.recurringWeekly} >= 0`),
-    index("rentals_clerk_user_id_idx").on(table.clerkUserId),
+    index("rentals_user_id_idx").on(table.userId),
     index("rentals_location_id_idx").on(table.locationId),
     index("rentals_status_created_at_idx").on(table.status, table.createdAt),
   ],

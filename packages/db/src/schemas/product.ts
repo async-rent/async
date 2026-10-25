@@ -1,8 +1,19 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { enumValuesSql } from "../utils/enum";
 import { categories } from "./category";
 import { locations } from "./location";
 import { timestamps } from "./timestamps";
+
+/**
+ * Product status values, mirroring core's `productStatusSchema`.
+ *
+ * `packages/db` cannot import core's zod schemas (core depends on db), so the
+ * literal union lives here and a core-side test asserts parity.
+ */
+export const productStatusValues = ["active", "archived"] as const;
+
+export type ProductStatusValue = (typeof productStatusValues)[number];
 
 /**
  * Catalog products.
@@ -24,13 +35,11 @@ export const products = sqliteTable(
       .references(() => categories.id, { onDelete: "restrict", onUpdate: "cascade" }),
     badge: text("badge"),
     featured: integer("featured", { mode: "boolean" }).notNull().default(false),
-    status: text("status", { enum: ["active", "archived"] })
-      .notNull()
-      .default("active"),
+    status: text("status", { enum: productStatusValues }).notNull().default("active"),
     ...timestamps,
   },
   (table) => [
-    check("products_status_check", sql`${table.status} in ('active', 'archived')`),
+    check("products_status_check", sql`${table.status} in (${enumValuesSql(productStatusValues)})`),
     index("products_category_id_idx").on(table.categoryId),
     index("products_status_featured_idx").on(table.status, table.featured),
     index("products_name_idx").on(table.name),

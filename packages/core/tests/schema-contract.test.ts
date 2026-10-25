@@ -6,9 +6,13 @@ import {
   carts,
   fulfillmentStatusValues,
   liveBillingAgreementStatusValues,
+  locationStatusValues,
+  locations,
   paymentProviderValues,
   paymentStatusValues,
   payments,
+  productStatusValues,
+  products,
   rentalItems,
   rentals,
   rentalStatusValues,
@@ -279,6 +283,24 @@ describe("rentals table", () => {
     );
   });
 
+  it("names the renter column provider-neutrally and optionally", () => {
+    const user = getTableConfig(rentals).columns.find((column) => column.name === "user_id");
+
+    expect(user).toBeDefined();
+    // Identity is optional: a rental can still be placed as a guest.
+    expect(user?.notNull).toBe(false);
+  });
+
+  it("keeps a user's rentals off a table scan", () => {
+    expect(indexesOf(rentals)).toContainEqual(
+      expect.objectContaining({
+        name: "rentals_user_id_idx",
+        unique: false,
+        columns: ["user_id"],
+      }),
+    );
+  });
+
   it("rejects a duplicate order number", () => {
     const number = getTableConfig(rentals).columns.find((column) => column.name === "number");
 
@@ -439,7 +461,7 @@ describe("check constraints", () => {
       rentals,
       "rentals_payment_status_snapshot_check",
       columnRef("rentals", "payment_status_snapshot"),
-      paymentStatusValues(),
+      paymentStatusValues,
       { nullable: true },
     );
   });
@@ -449,13 +471,13 @@ describe("check constraints", () => {
       payments,
       "payments_provider_check",
       columnRef("payments", "provider"),
-      paymentProviderValues(),
+      paymentProviderValues,
     );
     expectEnumCheck(
       payments,
       "payments_status_check",
       columnRef("payments", "status"),
-      paymentStatusValues(),
+      paymentStatusValues,
     );
   });
 
@@ -464,7 +486,7 @@ describe("check constraints", () => {
       billingAgreements,
       "billing_agreements_provider_check",
       columnRef("billing_agreements", "provider"),
-      paymentProviderValues(),
+      paymentProviderValues,
     );
     expectEnumCheck(
       billingAgreements,
@@ -477,6 +499,21 @@ describe("check constraints", () => {
       "billing_agreements_status_check",
       columnRef("billing_agreements", "status"),
       billingAgreementStatusValues,
+    );
+  });
+
+  it("binds each catalog enum check to its own column and enum values", () => {
+    expectEnumCheck(
+      products,
+      "products_status_check",
+      columnRef("products", "status"),
+      productStatusValues,
+    );
+    expectEnumCheck(
+      locations,
+      "locations_status_check",
+      columnRef("locations", "status"),
+      locationStatusValues,
     );
   });
 

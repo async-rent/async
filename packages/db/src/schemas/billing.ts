@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { enumValuesSql } from "../utils/enum";
 import { paymentProviderValues } from "./payment";
+import type { PaymentProviderValue } from "./payment";
 import { rentals } from "./rental";
 import { timestamps } from "./timestamps";
 /**
@@ -56,7 +57,7 @@ export const billingAgreements = sqliteTable(
     rentalId: text("rental_id")
       .notNull()
       .references(() => rentals.id, { onDelete: "restrict", onUpdate: "cascade" }),
-    provider: text("provider", { enum: paymentProviderValues() }).notNull(),
+    provider: text("provider").$type<PaymentProviderValue>().notNull(),
     providerAgreementId: text("provider_agreement_id"),
     interval: text("interval", { enum: billingIntervalValues }).notNull().default("weekly"),
     currency: text("currency").notNull(),
@@ -68,7 +69,7 @@ export const billingAgreements = sqliteTable(
   (table) => [
     check(
       "billing_agreements_provider_check",
-      sql`${table.provider} in (${enumValuesSql(paymentProviderValues())})`,
+      sql`${table.provider} in (${enumValuesSql(paymentProviderValues)})`,
     ),
     check(
       "billing_agreements_interval_check",

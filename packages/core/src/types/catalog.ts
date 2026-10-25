@@ -16,6 +16,8 @@ import {
  * minor units in that currency.
  */
 
+export const locationStatusSchema = z.enum(["active", "coming_soon"]);
+
 export const locationSchema = z.object({
   id: z.string().describe("Stable location id."),
   slug: z.string().describe('URL-safe key used in routes, e.g. "bali".'),
@@ -23,7 +25,7 @@ export const locationSchema = z.object({
   country: z.string().describe('Country name, e.g. "Indonesia".'),
   timezone: z.string().describe('IANA timezone, e.g. "Asia/Makassar".'),
   description: z.string().optional().describe("One-line description for the city picker."),
-  status: z.enum(["active", "coming_soon"]).default("active"),
+  status: locationStatusSchema.default("active"),
 });
 
 export type Location = z.infer<typeof locationSchema>;
@@ -53,7 +55,7 @@ export type CategoryRef = z.infer<typeof categoryRefSchema>;
  * means the product is not available in that location.
  */
 export const productPriceSchema = z.object({
-  locationSlug: z.string().describe('City this price applies to, e.g. "bali".'),
+  locationId: z.string().describe("Stable location id this price applies to."),
   currency: currencyCodeSchema.describe("Currency every amount in this row is quoted in."),
   weeklyPrice: amountSchema.describe("Weekly rental price in this city."),
   deposit: amountSchema.optional().describe("Refundable deposit in this city."),
@@ -114,8 +116,14 @@ export type ProductSort = z.infer<typeof productSortSchema>;
 
 export const productQuerySchema = z.object({
   q: z.string().optional().describe('Free-text search, e.g. "desk".'),
-  categorySlug: z.string().optional(),
-  locationSlug: z.string().optional(),
+  categoryId: z
+    .string()
+    .optional()
+    .describe("Stable category id to filter by; the edge resolves a slug to it."),
+  locationId: z
+    .string()
+    .optional()
+    .describe("Stable location id to filter by; the edge resolves a slug to it."),
   sort: productSortSchema.default("featured"),
   page: z.number().int().positive().default(1),
   pageSize: z.number().int().positive().max(48).default(12),
@@ -128,6 +136,6 @@ export const productPageSchema = paginationSchema(productSchema);
 export type ProductPage = z.infer<typeof productPageSchema>;
 
 /** Resolve a product's price in one city. */
-export function priceForLocation(product: Product, locationSlug: string) {
-  return product.prices.find((price) => price.locationSlug === locationSlug);
+export function priceForLocation(product: Product, locationId: string) {
+  return product.prices.find((price) => price.locationId === locationId);
 }

@@ -71,7 +71,7 @@ export function makeCategoryRef(overrides: Partial<CategoryRef> = {}): CategoryR
 
 export function makeProductPrice(overrides: Partial<ProductPrice> = {}): ProductPrice {
   return {
-    locationSlug: "bali",
+    locationId: makeLocation().id,
     currency: "USD",
     weeklyPrice: 12000,
     ...overrides,
@@ -126,7 +126,7 @@ export function makeCartItem(overrides: Partial<CartItem> = {}): CartItem {
 export function makeCart(overrides: Partial<Cart> = {}): Cart {
   return {
     id: "cart_01",
-    locationSlug: "bali",
+    locationId: makeLocation().id,
     items: [makeCartItem()],
     summary: makeChargeSummary(),
     ...overrides,
@@ -167,7 +167,7 @@ export function makeRental(overrides: Partial<Rental> = {}): Rental {
     number: "AS-1042",
     contact: makeContact(),
     address: makeAddress(),
-    locationSlug: "bali",
+    locationId: makeLocation().id,
     currency: "USD",
     items: [makeRentalItem()],
     startDate: isoDate,
