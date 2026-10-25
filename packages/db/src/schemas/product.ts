@@ -100,7 +100,8 @@ export const productSpecs = sqliteTable(
  * Weekly price and stock for one product in one city.
  *
  * A missing row means the product is not offered there. Amounts are minor
- * units in `currency` (USD today), matching the domain's `amountSchema`.
+ * units in `currency` (USD for Bali and Chiang Mai, EUR for Lisbon), matching
+ * the domain's `amountSchema`.
  */
 export const productPrices = sqliteTable(
   "product_prices",

@@ -12,8 +12,8 @@ import {
  *
  * Storefront and MCP read from these same shapes. Prices are weekly and set
  * independently per location, so Bali and Lisbon can differ. Each price row
- * quotes a single `currency` (USD today); the three amounts in the row are
- * minor units in that currency.
+ * quotes a single `currency` (USD for Bali and Chiang Mai, EUR for Lisbon);
+ * the three amounts in the row are minor units in that currency.
  */
 
 export const locationStatusSchema = z.enum(["active", "coming_soon"]);

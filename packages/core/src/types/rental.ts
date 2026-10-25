@@ -15,7 +15,8 @@ import {
  * The rental agreement created at checkout.
  *
  * Contact, address and line prices are snapshots so later catalog or profile
- * edits do not rewrite a historical order. The MVP has one delivery per
+ * edits do not rewrite a historical order. Every amount on the rental is in
+ * the currency of the cart it came from. The MVP has one delivery per
  * rental; a separate delivery-job aggregate is not needed yet.
  */
 

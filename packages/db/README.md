@@ -36,6 +36,11 @@ cities, nine gear categories and 25 curated monis.rent products (photos, specs,
 highlights and per-city weekly prices). Da Nang has no published price sheet
 yet, so its rows mirror another city — see the file header.
 
+Prices keep the currency of the sheet they come from: Bali and Chiang Mai are
+priced in USD, Lisbon in EUR (monis.rent's Lisbon merchant is EUR-denominated),
+so nothing is converted. A price row, a cart, a rental and a payment each
+carry one currency.
+
 It bypasses migration tracking on purpose, so apply it with `wrangler d1 execute`
 after the schema is up to date:
 

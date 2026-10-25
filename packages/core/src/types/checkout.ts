@@ -6,7 +6,9 @@ import { amountSchema, currencyCodeSchema, imageSchema } from "../utils";
  *
  * A cart is single-currency: `summary.currency` applies to every line and to
  * every amount in the summary, so a cart can never sum amounts of different
- * currencies. Rentals are weekly. The first week plus any deposit and delivery
+ * currencies. It is the currency the cart's price rows are quoted in (USD for
+ * Bali and Chiang Mai, EUR for Lisbon), and the rental and its payments carry
+ * it through. Rentals are weekly. The first week plus any deposit and delivery
  * fee is captured today through the payment provider; the following weeks are
  * billed weekly by the billing agreement.
  */
