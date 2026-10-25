@@ -81,6 +81,18 @@ function checkSqlOf(table: SQLiteTable, name: string): string {
   return dialect.sqlToQuery(found.value as SQL).sql;
 }
 
+/**
+ * Asserts each named check against the fragments that make up its
+ * predicate, so weakening or dropping a bound fails the test.
+ */
+function expectCheckPredicates(table: SQLiteTable, predicates: [string, string[]][]): void {
+  for (const [name, bounds] of predicates) {
+    const rendered = checkSqlOf(table, name);
+
+    for (const bound of bounds) expect(rendered).toContain(bound);
+  }
+}
+
 function primaryKeysOf(table: SQLiteTable): { name: string; columns: string[] }[] {
   return getTableConfig(table).primaryKeys.map((primaryKey) => ({
     name: primaryKey.getName(),
@@ -271,20 +283,12 @@ describe("cart items table", () => {
   });
 
   it("rejects an invalid position, quantity, price or deposit", () => {
-    // Each check is pinned to its own predicate, so weakening a bound —
-    // say `quantity > 0` to `quantity >= 0` — fails the test.
-    const predicates: [string, string[]][] = [
+    expectCheckPredicates(cartItems, [
       ["cart_items_position_check", [">= 0"]],
       ["cart_items_quantity_check", ["> 0"]],
       ["cart_items_weekly_price_check", [">= 0"]],
       ["cart_items_deposit_check", ["is null", ">= 0"]],
-    ];
-
-    for (const [name, bounds] of predicates) {
-      const rendered = checkSqlOf(cartItems, name);
-
-      for (const bound of bounds) expect(rendered).toContain(bound);
-    }
+    ]);
   });
 });
 
@@ -321,20 +325,12 @@ describe("rental items table", () => {
   });
 
   it("rejects an invalid position, quantity, price or deposit", () => {
-    // Each check is pinned to its own predicate, so weakening a bound —
-    // say `quantity > 0` to `quantity >= 0` — fails the test.
-    const predicates: [string, string[]][] = [
+    expectCheckPredicates(rentalItems, [
       ["rental_items_position_check", [">= 0"]],
       ["rental_items_quantity_check", ["> 0"]],
       ["rental_items_weekly_price_check", [">= 0"]],
       ["rental_items_deposit_check", ["is null", ">= 0"]],
-    ];
-
-    for (const [name, bounds] of predicates) {
-      const rendered = checkSqlOf(rentalItems, name);
-
-      for (const bound of bounds) expect(rendered).toContain(bound);
-    }
+    ]);
   });
 });
 
@@ -372,5 +368,43 @@ describe("check constraints", () => {
       "billing_agreements_status_check",
       billingAgreementStatusValues,
     );
+  });
+
+  it("pins the numeric and currency checks of the carts table", () => {
+    expectCheckPredicates(carts, [
+      ["carts_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
+      ["carts_weekly_subtotal_check", [">= 0"]],
+      ["carts_deposit_check", [">= 0"]],
+      ["carts_delivery_fee_check", [">= 0"]],
+      ["carts_discount_check", [">= 0"]],
+      ["carts_total_due_today_check", [">= 0"]],
+      ["carts_recurring_weekly_check", [">= 0"]],
+    ]);
+  });
+
+  it("pins the numeric and currency checks of the rentals table", () => {
+    expectCheckPredicates(rentals, [
+      ["rentals_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
+      ["rentals_weekly_subtotal_check", [">= 0"]],
+      ["rentals_deposit_check", [">= 0"]],
+      ["rentals_delivery_fee_check", [">= 0"]],
+      ["rentals_discount_check", [">= 0"]],
+      ["rentals_total_due_today_check", [">= 0"]],
+      ["rentals_recurring_weekly_check", [">= 0"]],
+    ]);
+  });
+
+  it("pins the numeric and currency checks of the payments table", () => {
+    expectCheckPredicates(payments, [
+      ["payments_billing_cycle_check", ["> 0"]],
+      ["payments_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
+      ["payments_amount_check", [">= 0"]],
+    ]);
+  });
+
+  it("pins the currency check of the billing agreements table", () => {
+    expectCheckPredicates(billingAgreements, [
+      ["billing_agreements_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
+    ]);
   });
 });
