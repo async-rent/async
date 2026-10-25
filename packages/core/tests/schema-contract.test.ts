@@ -82,15 +82,63 @@ function checkSqlOf(table: SQLiteTable, name: string): string {
 }
 
 /**
- * Asserts each named check against the fragments that make up its
- * predicate, so weakening or dropping a bound fails the test.
+ * Asserts the exact SQL of a named check.
+ *
+ * The whole predicate is compared, so the guarded column, the operator and the
+ * bound are pinned in one assertion: re-pointing a check at another column,
+ * weakening a bound or appending a disjunction all change the rendered SQL
+ * and fail here. The rendered SQL is the SQL the migration applies.
  */
-function expectCheckPredicates(table: SQLiteTable, predicates: [string, string[]][]): void {
-  for (const [name, bounds] of predicates) {
-    const rendered = checkSqlOf(table, name);
+function expectCheckSql(table: SQLiteTable, name: string, expected: string): void {
+  expect(checkSqlOf(table, name)).toBe(expected);
+}
 
-    for (const bound of bounds) expect(rendered).toContain(bound);
-  }
+/** The reference of a column, the way SQLite sees it. */
+function columnRef(table: string, column: string): string {
+  return `"${table}"."${column}"`;
+}
+
+/**
+ * Asserts an enum check against the column it guards and the values it
+ * accepts. A check bound to the wrong column or the wrong list fails here.
+ */
+function expectEnumCheck(
+  table: SQLiteTable,
+  name: string,
+  column: string,
+  values: readonly string[],
+  options: { nullable?: boolean } = {},
+): void {
+  const list = values.map((value) => `'${value}'`).join(", ");
+  const expected = options.nullable
+    ? `${column} is null or ${column} in (${list})`
+    : `${column} in (${list})`;
+
+  expectCheckSql(table, name, expected);
+}
+
+/**
+ * Asserts a numeric check against the column it guards and its bound.
+ */
+function expectNumericCheck(
+  table: SQLiteTable,
+  name: string,
+  column: string,
+  bound: "> 0" | ">= 0",
+  options: { nullable?: boolean } = {},
+): void {
+  const expected = options.nullable
+    ? `${column} is null or ${column} ${bound}`
+    : `${column} ${bound}`;
+
+  expectCheckSql(table, name, expected);
+}
+
+/**
+ * Asserts a currency check against the column it guards.
+ */
+function expectCurrencyCheck(table: SQLiteTable, name: string, column: string): void {
+  expectCheckSql(table, name, `length(${column}) = 3 and ${column} glob '[A-Z][A-Z][A-Z]'`);
 }
 
 function primaryKeysOf(table: SQLiteTable): { name: string; columns: string[] }[] {
@@ -283,12 +331,31 @@ describe("cart items table", () => {
   });
 
   it("rejects an invalid position, quantity, price or deposit", () => {
-    expectCheckPredicates(cartItems, [
-      ["cart_items_position_check", [">= 0"]],
-      ["cart_items_quantity_check", ["> 0"]],
-      ["cart_items_weekly_price_check", [">= 0"]],
-      ["cart_items_deposit_check", ["is null", ">= 0"]],
-    ]);
+    expectNumericCheck(
+      cartItems,
+      "cart_items_position_check",
+      columnRef("cart_items", "position"),
+      ">= 0",
+    );
+    expectNumericCheck(
+      cartItems,
+      "cart_items_quantity_check",
+      columnRef("cart_items", "quantity"),
+      "> 0",
+    );
+    expectNumericCheck(
+      cartItems,
+      "cart_items_weekly_price_check",
+      columnRef("cart_items", "weekly_price"),
+      ">= 0",
+    );
+    expectNumericCheck(
+      cartItems,
+      "cart_items_deposit_check",
+      columnRef("cart_items", "deposit"),
+      ">= 0",
+      { nullable: true },
+    );
   });
 });
 
@@ -325,86 +392,170 @@ describe("rental items table", () => {
   });
 
   it("rejects an invalid position, quantity, price or deposit", () => {
-    expectCheckPredicates(rentalItems, [
-      ["rental_items_position_check", [">= 0"]],
-      ["rental_items_quantity_check", ["> 0"]],
-      ["rental_items_weekly_price_check", [">= 0"]],
-      ["rental_items_deposit_check", ["is null", ">= 0"]],
-    ]);
+    expectNumericCheck(
+      rentalItems,
+      "rental_items_position_check",
+      columnRef("rental_items", "position"),
+      ">= 0",
+    );
+    expectNumericCheck(
+      rentalItems,
+      "rental_items_quantity_check",
+      columnRef("rental_items", "quantity"),
+      "> 0",
+    );
+    expectNumericCheck(
+      rentalItems,
+      "rental_items_weekly_price_check",
+      columnRef("rental_items", "weekly_price"),
+      ">= 0",
+    );
+    expectNumericCheck(
+      rentalItems,
+      "rental_items_deposit_check",
+      columnRef("rental_items", "deposit"),
+      ">= 0",
+      { nullable: true },
+    );
   });
 });
 
 describe("check constraints", () => {
-  /**
-   * Asserts a single named check against a single enum list. A check bound to
-   * the wrong list fails here, where a table-wide string match would not.
-   */
-  function expectEnumCheck(table: SQLiteTable, name: string, values: readonly string[]): void {
-    const rendered = checkSqlOf(table, name);
-
-    for (const value of values) expect(rendered).toContain(`'${value}'`);
-  }
-
-  it("binds each rental check to its own enum values", () => {
-    expectEnumCheck(rentals, "rentals_status_check", rentalStatusValues);
-    expectEnumCheck(rentals, "rentals_fulfillment_status_check", fulfillmentStatusValues);
-    expectEnumCheck(rentals, "rentals_payment_status_snapshot_check", paymentStatusValues());
+  it("binds each rental check to its own column and enum values", () => {
+    expectEnumCheck(
+      rentals,
+      "rentals_status_check",
+      columnRef("rentals", "status"),
+      rentalStatusValues,
+    );
+    expectEnumCheck(
+      rentals,
+      "rentals_fulfillment_status_check",
+      columnRef("rentals", "fulfillment_status"),
+      fulfillmentStatusValues,
+      { nullable: true },
+    );
+    expectEnumCheck(
+      rentals,
+      "rentals_payment_status_snapshot_check",
+      columnRef("rentals", "payment_status_snapshot"),
+      paymentStatusValues(),
+      { nullable: true },
+    );
   });
 
-  it("binds each payment check to its own enum values", () => {
-    expectEnumCheck(payments, "payments_provider_check", paymentProviderValues());
-    expectEnumCheck(payments, "payments_status_check", paymentStatusValues());
+  it("binds each payment check to its own column and enum values", () => {
+    expectEnumCheck(
+      payments,
+      "payments_provider_check",
+      columnRef("payments", "provider"),
+      paymentProviderValues(),
+    );
+    expectEnumCheck(
+      payments,
+      "payments_status_check",
+      columnRef("payments", "status"),
+      paymentStatusValues(),
+    );
   });
 
-  it("binds each billing agreement check to its own enum values", () => {
+  it("binds each billing agreement check to its own column and enum values", () => {
     expectEnumCheck(
       billingAgreements,
       "billing_agreements_provider_check",
+      columnRef("billing_agreements", "provider"),
       paymentProviderValues(),
     );
-    expectEnumCheck(billingAgreements, "billing_agreements_interval_check", billingIntervalValues);
+    expectEnumCheck(
+      billingAgreements,
+      "billing_agreements_interval_check",
+      columnRef("billing_agreements", "interval"),
+      billingIntervalValues,
+    );
     expectEnumCheck(
       billingAgreements,
       "billing_agreements_status_check",
+      columnRef("billing_agreements", "status"),
       billingAgreementStatusValues,
     );
   });
 
-  it("pins the numeric and currency checks of the carts table", () => {
-    expectCheckPredicates(carts, [
-      ["carts_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
-      ["carts_weekly_subtotal_check", [">= 0"]],
-      ["carts_deposit_check", [">= 0"]],
-      ["carts_delivery_fee_check", [">= 0"]],
-      ["carts_discount_check", [">= 0"]],
-      ["carts_total_due_today_check", [">= 0"]],
-      ["carts_recurring_weekly_check", [">= 0"]],
-    ]);
+  it("pins the money checks of the carts table", () => {
+    expectCurrencyCheck(carts, "carts_currency_check", columnRef("carts", "currency"));
+    expectNumericCheck(
+      carts,
+      "carts_weekly_subtotal_check",
+      columnRef("carts", "weekly_subtotal"),
+      ">= 0",
+    );
+    expectNumericCheck(carts, "carts_deposit_check", columnRef("carts", "deposit"), ">= 0");
+    expectNumericCheck(
+      carts,
+      "carts_delivery_fee_check",
+      columnRef("carts", "delivery_fee"),
+      ">= 0",
+    );
+    expectNumericCheck(carts, "carts_discount_check", columnRef("carts", "discount"), ">= 0");
+    expectNumericCheck(
+      carts,
+      "carts_total_due_today_check",
+      columnRef("carts", "total_due_today"),
+      ">= 0",
+    );
+    expectNumericCheck(
+      carts,
+      "carts_recurring_weekly_check",
+      columnRef("carts", "recurring_weekly"),
+      ">= 0",
+    );
   });
 
-  it("pins the numeric and currency checks of the rentals table", () => {
-    expectCheckPredicates(rentals, [
-      ["rentals_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
-      ["rentals_weekly_subtotal_check", [">= 0"]],
-      ["rentals_deposit_check", [">= 0"]],
-      ["rentals_delivery_fee_check", [">= 0"]],
-      ["rentals_discount_check", [">= 0"]],
-      ["rentals_total_due_today_check", [">= 0"]],
-      ["rentals_recurring_weekly_check", [">= 0"]],
-    ]);
+  it("pins the money checks of the rentals table", () => {
+    expectCurrencyCheck(rentals, "rentals_currency_check", columnRef("rentals", "currency"));
+    expectNumericCheck(
+      rentals,
+      "rentals_weekly_subtotal_check",
+      columnRef("rentals", "weekly_subtotal"),
+      ">= 0",
+    );
+    expectNumericCheck(rentals, "rentals_deposit_check", columnRef("rentals", "deposit"), ">= 0");
+    expectNumericCheck(
+      rentals,
+      "rentals_delivery_fee_check",
+      columnRef("rentals", "delivery_fee"),
+      ">= 0",
+    );
+    expectNumericCheck(rentals, "rentals_discount_check", columnRef("rentals", "discount"), ">= 0");
+    expectNumericCheck(
+      rentals,
+      "rentals_total_due_today_check",
+      columnRef("rentals", "total_due_today"),
+      ">= 0",
+    );
+    expectNumericCheck(
+      rentals,
+      "rentals_recurring_weekly_check",
+      columnRef("rentals", "recurring_weekly"),
+      ">= 0",
+    );
   });
 
-  it("pins the numeric and currency checks of the payments table", () => {
-    expectCheckPredicates(payments, [
-      ["payments_billing_cycle_check", ["> 0"]],
-      ["payments_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
-      ["payments_amount_check", [">= 0"]],
-    ]);
+  it("pins the money checks of the payments table", () => {
+    expectCurrencyCheck(payments, "payments_currency_check", columnRef("payments", "currency"));
+    expectNumericCheck(
+      payments,
+      "payments_billing_cycle_check",
+      columnRef("payments", "billing_cycle"),
+      "> 0",
+    );
+    expectNumericCheck(payments, "payments_amount_check", columnRef("payments", "amount"), ">= 0");
   });
 
   it("pins the currency check of the billing agreements table", () => {
-    expectCheckPredicates(billingAgreements, [
-      ["billing_agreements_currency_check", ["length(", "= 3", "glob '[A-Z][A-Z][A-Z]'"]],
-    ]);
+    expectCurrencyCheck(
+      billingAgreements,
+      "billing_agreements_currency_check",
+      columnRef("billing_agreements", "currency"),
+    );
   });
 });
