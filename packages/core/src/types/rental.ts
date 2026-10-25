@@ -72,10 +72,10 @@ export const rentalSchema = z
   .object({
     id: z.string(),
     number: z.string().describe('Human-readable order number, e.g. "AS-1042".'),
-    clerkUserId: z.string().optional(),
+    userId: z.string().optional().describe("Stable user id, when the rental was placed signed in."),
     contact: contactSchema,
     address: addressSchema,
-    locationSlug: z.string(),
+    locationId: z.string().describe("Stable location id the rental is delivered in."),
     currency: currencyCodeSchema.describe("Currency every amount on the rental is in."),
     items: z.array(rentalItemSchema).min(1),
     startDate: dateSchema,
