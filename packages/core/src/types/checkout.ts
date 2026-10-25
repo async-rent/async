@@ -39,7 +39,7 @@ export type CartItem = z.infer<typeof cartItemSchema>;
 
 export const cartSchema = z.object({
   id: z.string().describe("Stable cart id."),
-  customerId: z.string().optional().describe("Clerk user id, when signed in."),
+  customerId: z.string().optional().describe("Stable user id, when signed in."),
   locationId: z.string().describe("Stable location id this cart is for."),
   items: z.array(cartItemSchema).min(1),
   summary: chargeSummarySchema,

@@ -2,8 +2,10 @@ import {
   billingAgreementStatusValues,
   billingIntervalValues,
   fulfillmentStatusValues,
+  locationStatusValues,
   paymentProviderValues,
   paymentStatusValues,
+  productStatusValues,
   rentalStatusValues,
 } from "@async-rent/db";
 import { describe, expect, it } from "vite-plus/test";
@@ -11,8 +13,10 @@ import {
   billingAgreementStatusSchema,
   billingIntervalSchema,
   fulfillmentStatusSchema,
+  locationStatusSchema,
   paymentProviderSchema,
   paymentStatusSchema,
+  productStatusSchema,
   rentalStatusSchema,
 } from "../src/types";
 
@@ -28,6 +32,14 @@ describe("db enum values", () => {
 
   it("match fulfillmentStatusSchema", () => {
     expect(fulfillmentStatusValues).toEqual(fulfillmentStatusSchema.options);
+  });
+
+  it("match locationStatusSchema", () => {
+    expect(locationStatusValues).toEqual(locationStatusSchema.options);
+  });
+
+  it("match productStatusSchema", () => {
+    expect(productStatusValues).toEqual(productStatusSchema.options);
   });
 
   it("match paymentStatusSchema", () => {

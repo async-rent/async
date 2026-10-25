@@ -16,6 +16,8 @@ import {
  * minor units in that currency.
  */
 
+export const locationStatusSchema = z.enum(["active", "coming_soon"]);
+
 export const locationSchema = z.object({
   id: z.string().describe("Stable location id."),
   slug: z.string().describe('URL-safe key used in routes, e.g. "bali".'),
@@ -23,7 +25,7 @@ export const locationSchema = z.object({
   country: z.string().describe('Country name, e.g. "Indonesia".'),
   timezone: z.string().describe('IANA timezone, e.g. "Asia/Makassar".'),
   description: z.string().optional().describe("One-line description for the city picker."),
-  status: z.enum(["active", "coming_soon"]).default("active"),
+  status: locationStatusSchema.default("active"),
 });
 
 export type Location = z.infer<typeof locationSchema>;

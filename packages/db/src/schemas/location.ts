@@ -4,7 +4,7 @@ import { enumValuesSql } from "../utils/enum";
 import { timestamps } from "./timestamps";
 
 /**
- * Location status values, mirroring core's `locationSchema` status enum.
+ * Location status values, mirroring core's `locationStatusSchema`.
  *
  * `packages/db` cannot import core's zod schemas (core depends on db), so the
  * literal union lives here and a core-side test asserts parity.
