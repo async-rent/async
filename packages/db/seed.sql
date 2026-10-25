@@ -4,6 +4,9 @@
 -- Every product keeps at most two photos. The files are downloaded to
 -- products/images/ and referenced by their site path (/products/images/<sequence>.jpg);
 -- they are uploaded to the R2 bucket from there, so only the path prefix changes.
+-- The bucket is `async-rent-products` and the objects live under the
+-- `products/images/` key prefix, matching the site paths below. No worker binds
+-- that bucket yet - the storefront that will serve the photos is still to come.
 -- Prices keep the currency of the sheet they come from. The Bali and Chiang Mai
 -- sheets are priced in USD, the Lisbon sheet is priced in EUR (monis.rent's
 -- Lisbon merchant declares EUR), so the Lisbon rows carry `EUR` and nothing is

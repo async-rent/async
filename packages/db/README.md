@@ -41,6 +41,11 @@ priced in USD, Lisbon in EUR (monis.rent's Lisbon merchant is EUR-denominated),
 so nothing is converted. A price row, a cart, a rental and a payment each
 carry one currency.
 
+The 50 product photos live in the `async-rent-products` R2 bucket under the
+`products/images/` key prefix, and the seed's `product_images.url` rows hold
+the matching site paths (`/products/images/<sequence>.jpg`). No worker binds
+that bucket yet — the storefront that will serve the photos is still to come.
+
 It bypasses migration tracking on purpose, so apply it with `wrangler d1 execute`
 after the schema is up to date:
 
