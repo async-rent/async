@@ -28,7 +28,7 @@ import {
   productPageSchema,
   productQuerySchema,
   productSchema,
-  type ProductQueryInput,
+  type ProductQuery,
 } from "../types";
 import { createResult } from "../utils";
 import type { Result } from "../utils";
@@ -300,7 +300,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   }
 
   async function searchProducts(
-    query: ProductQueryInput = {},
+    query: ProductQuery = {},
   ): Promise<Result<ProductPage, "invalid_product_query" | "failed_to_search_products">> {
     const { success, failed } = searchProductsResult;
 

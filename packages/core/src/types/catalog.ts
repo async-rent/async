@@ -129,10 +129,7 @@ export const productQuerySchema = z.object({
   pageSize: z.number().int().positive().max(48).default(12),
 });
 
-export type ProductQuery = z.infer<typeof productQuerySchema>;
-
-/** What a caller may pass in: every filter is optional and the defaults fill in. */
-export type ProductQueryInput = z.input<typeof productQuerySchema>;
+export type ProductQuery = z.input<typeof productQuerySchema>;
 
 export const productPageSchema = paginationSchema(productSchema);
 
