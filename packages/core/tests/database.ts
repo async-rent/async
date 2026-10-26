@@ -38,21 +38,40 @@ export function createTestDatabase(): TestDatabase {
 
   // `sqlite-proxy` hands rows back as arrays positional to the selected
   // columns, which is what drizzle's row mapper expects.
-  const proxy = drizzle(async (query, params, method) => {
+  const execute = (query: string, params: unknown[], method: string) => {
     const statement = sqlite.prepare(query);
 
     if (method === "run") {
-      statement.run(...params);
+      statement.run(...(params as never[]));
 
       return { rows: [] };
     }
 
     const columns = statement.columns().map((column) => column.name);
-    const rows = statement.all(...params) as Record<string, unknown>[];
+    const rows = statement.all(...(params as never[])) as Record<string, unknown>[];
     const values = rows.map((row) => columns.map((name) => row[name]));
 
     return { rows: method === "get" ? values.slice(0, 1) : values };
-  });
+  };
+
+  const proxy = drizzle(
+    async (query, params, method) => execute(query, params, method),
+    // Mirror D1: a batch is one transaction, and a failed statement rolls the
+    // whole sequence back.
+    async (batch) => {
+      sqlite.exec("begin");
+
+      try {
+        const results = batch.map(({ sql, params, method }) => execute(sql, params, method));
+        sqlite.exec("commit");
+
+        return results;
+      } catch (error) {
+        sqlite.exec("rollback");
+        throw error;
+      }
+    },
+  );
 
   const db: DrizzleD1Database = fromAny(proxy);
 

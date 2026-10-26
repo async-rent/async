@@ -16,8 +16,8 @@ import type {
   ProductRow,
   ProductSpecRow,
 } from "@async-rent/db";
-import { and, asc, count, desc, eq, inArray, min, sql } from "drizzle-orm";
-import type { SQL, SQLWrapper } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
@@ -60,15 +60,51 @@ function searchTokenCondition(token: string): SQL {
   )`;
 }
 
-/** The order a search applies, with the sort price supplied by the join. */
-function orderFor(sort: ProductSort, weeklyPrice: SQLWrapper): SQL[] {
+/** A product only appears in the catalog when it can be rented somewhere. */
+const pricedSomewhere = sql`exists (
+  select 1 from ${productPrices}
+  where ${productPrices.productId} = ${products.id}
+)`;
+
+function pricedIn(locationId: string): SQL {
+  return sql`exists (
+    select 1 from ${productPrices}
+    where ${productPrices.productId} = ${products.id}
+      and ${productPrices.locationId} = ${locationId}
+  )`;
+}
+
+/**
+ * The price a sort compares. With a city selected that city's weekly price is
+ * the one quoted to the visitor; without one, the product's cheapest city
+ * stands in so the order is still stable.
+ */
+function priceSort(locationId: string | undefined): SQL {
+  if (locationId) {
+    return sql`(
+      select ${productPrices.weeklyPrice}
+      from ${productPrices}
+      where ${productPrices.productId} = ${products.id}
+        and ${productPrices.locationId} = ${locationId}
+    )`;
+  }
+
+  return sql`(
+    select min(${productPrices.weeklyPrice})
+    from ${productPrices}
+    where ${productPrices.productId} = ${products.id}
+  )`;
+}
+
+function orderFor(sort: ProductSort, locationId: string | undefined): SQL[] {
   const byName = [asc(products.name), asc(products.id)];
+  const price = priceSort(locationId);
 
   switch (sort) {
     case "price_asc":
-      return [asc(weeklyPrice), ...byName];
+      return [asc(price), ...byName];
     case "price_desc":
-      return [desc(weeklyPrice), ...byName];
+      return [desc(price), ...byName];
     case "name_asc":
       return byName;
     case "newest":
@@ -210,31 +246,6 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   }
 
   /**
-   * One row per product with the price a search sorts on: the selected city's
-   * weekly price, or the cheapest city when no city is chosen.
-   *
-   * Grouping by product is what keeps the join safe: `product_prices` can hold
-   * a row per city, so joining it directly would repeat a product once per city
-   * — and make `count()` report more rows than the page holds. The subquery
-   * folds those rows down to exactly one per product.
-   *
-   * The inner join against it doubles as the availability filter: a product
-   * with no price row for the selected city (or no price anywhere when no city
-   * is selected) has nothing to join to and drops out.
-   */
-  function pricedProducts(locationId: string | undefined) {
-    return db
-      .select({
-        productId: productPrices.productId,
-        weeklyPrice: min(productPrices.weeklyPrice).as("weekly_price"),
-      })
-      .from(productPrices)
-      .where(locationId ? eq(productPrices.locationId, locationId) : undefined)
-      .groupBy(productPrices.productId)
-      .as("product_price");
-  }
-
-  /**
    * Loads the child rows for a batch of products in one round of queries, so a
    * page of results costs a fixed number of statements instead of one per card.
    */
@@ -244,7 +255,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     const productIds = rows.map((row) => row.id);
     const categoryIds = [...new Set(rows.map((row) => row.categoryId))];
 
-    const [categoryRows, imageRows, highlightRows, specRows, priceRows] = await Promise.all([
+    const [categoryRows, imageRows, highlightRows, specRows, priceRows] = await db.batch([
       db.select().from(categories).where(inArray(categories.id, categoryIds)),
       db
         .select()
@@ -298,9 +309,10 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
     const { q, categoryId, locationId, sort, page, pageSize } = parsed.data;
 
-    const conditions: SQL[] = [eq(products.status, "active")];
+    const conditions: SQL[] = [eq(products.status, "active"), pricedSomewhere];
 
     if (categoryId) conditions.push(eq(products.categoryId, categoryId));
+    if (locationId) conditions.push(pricedIn(locationId));
 
     if (q) {
       const tokens = q
@@ -313,20 +325,14 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     }
 
     const where = and(...conditions);
-    const prices = pricedProducts(locationId);
-    const orderBy = orderFor(sort, prices.weeklyPrice);
+    const orderBy = orderFor(sort, locationId);
 
     try {
-      const [countRows, rows] = await Promise.all([
-        db
-          .select({ total: count() })
-          .from(products)
-          .innerJoin(prices, eq(prices.productId, products.id))
-          .where(where),
+      const [countRows, rows] = await db.batch([
+        db.select({ total: count() }).from(products).where(where),
         db
           .select()
           .from(products)
-          .innerJoin(prices, eq(prices.productId, products.id))
           .where(where)
           .orderBy(...orderBy)
           .limit(pageSize)
@@ -334,7 +340,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
       ]);
 
       const total = countRows[0]?.total ?? 0;
-      const items = await loadProducts(rows.map((row) => row.products));
+      const items = await loadProducts(rows);
 
       return success({
         items,
