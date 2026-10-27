@@ -25,8 +25,8 @@ import type { Category, Location, Product, ProductSort } from "../types";
 import {
   categorySchema,
   locationSchema,
-  maxSearchTokens,
   productPageSchema,
+  productQuerySchema,
   productSchema,
   type ProductQuery,
 } from "../types";
@@ -206,7 +206,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
   const searchProductsResult = createResult(
     productPageSchema,
-    z.enum(["failed_to_search_products"]),
+    z.enum(["invalid_product_query", "failed_to_search_products"]),
   );
 
   const getProductResult = createResult(
@@ -317,7 +317,16 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   ): Promise<z.infer<(typeof searchProductsResult)["schema"]>> {
     const { success, failed } = searchProductsResult;
 
-    const { q, categoryId, locationId, sort, page, pageSize } = query;
+    /**
+     * The bounds this implementation relies on — a page size under D1's
+     * bound-parameter limit, a non-negative `LIMIT`/`OFFSET`, a `q` within
+     * the word cap — live in `productQuerySchema` and are enforced here, on
+     * the path that builds the query, so no caller can bypass them.
+     */
+    const parsed = productQuerySchema.safeParse(query);
+    if (!parsed.success) return failed("invalid_product_query", "Invalid product query");
+
+    const { q, categoryId, locationId, sort, page, pageSize } = parsed.data;
 
     const conditions: SQL[] = [eq(products.status, "active"), pricedSomewhere];
 
@@ -325,12 +334,9 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     if (locationId) conditions.push(pricedIn(locationId));
 
     if (q) {
-      // The schema rejects queries over the word cap at the edge; this slice
-      // keeps a direct call from blowing up the query anyway.
       const tokens = foldToken(q)
         .split(/\s+/)
-        .filter((token) => token.length > 0)
-        .slice(0, maxSearchTokens);
+        .filter((token) => token.length > 0);
 
       for (const token of tokens) conditions.push(searchTokenCondition(token));
     }
@@ -361,6 +367,9 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     return success({
       items,
       total,
+      // Counted from the matched rows, not from `items`: an invalid row drops
+      // out of the page above, and the list must keep going past it.
+      hasMore: page * pageSize < total,
     });
   }
 

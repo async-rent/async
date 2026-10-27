@@ -89,6 +89,8 @@ const createdAt = Date.UTC(2026, 0, 1);
 
 interface ProductFixture {
   id: string;
+  /** Route key. Defaults to the id, so most fixtures are never looked up by slug. */
+  slug?: string;
   name: string;
   categoryId?: string;
   tagline?: string;
@@ -134,7 +136,7 @@ function insertProduct(database: TestDatabase, fixture: ProductFixture): void {
     )
     .run(
       fixture.id,
-      fixture.id,
+      fixture.slug ?? fixture.id,
       fixture.name,
       fixture.tagline ?? "A product for the test catalog.",
       fixture.description ?? "Long-form copy for the product page.",
@@ -197,6 +199,7 @@ function seedCatalog(database: TestDatabase): void {
 
   insertProduct(database, {
     id: "prd_smartdesk",
+    slug: "smartdesk-pro",
     name: "SmartDesk Pro",
     tagline: "Electric standing desk with memory presets",
     description: "A dual-motor desk that moves in seconds.",
@@ -217,6 +220,7 @@ function seedCatalog(database: TestDatabase): void {
 
   insertProduct(database, {
     id: "prd_oak",
+    slug: "oak-writing-desk",
     name: "Oak Writing Desk",
     tagline: "Solid oak fixed-height desk",
     description: "A quiet wooden desk with two grommets.",
@@ -229,6 +233,7 @@ function seedCatalog(database: TestDatabase): void {
 
   insertProduct(database, {
     id: "prd_chair",
+    slug: "ergonomic-task-chair",
     name: "Ergonomic Task Chair",
     categoryId: "cat_chairs",
     tagline: "Mesh-back chair with 4D armrests",
@@ -240,6 +245,7 @@ function seedCatalog(database: TestDatabase): void {
 
   insertProduct(database, {
     id: "prd_lamp",
+    slug: "arc-floor-lamp",
     name: "Arc Floor Lamp",
     categoryId: "cat_lighting",
     tagline: "Dimmable arc lamp in warm white",
@@ -250,6 +256,7 @@ function seedCatalog(database: TestDatabase): void {
 
   insertProduct(database, {
     id: "prd_archived",
+    slug: "archived-desk",
     name: "Archived Desk",
     status: "archived",
     prices: [{ locationId: "loc_bali", weeklyPrice: 1000 }],
@@ -264,8 +271,8 @@ function setup() {
 }
 
 /**
- * A complete query: applying the schema's defaults is the caller's job, not
- * the service's (the storefront parses the edge input before calling core).
+ * The service parses the query itself, so it fills the schema's defaults;
+ * this helper spells them out to keep each case's page shape explicit.
  */
 function makeQuery(overrides: Partial<ProductQuery> = {}): ProductQuery {
   return {
@@ -471,7 +478,7 @@ describe("searchProducts", () => {
       makeQuery({ sort: "name_asc", page: 1, pageSize: 2 }),
     );
     if (!first.success) throw new Error(first.error.message);
-    expect(first.data).toEqual({ total: 4, items: expect.any(Array) });
+    expect(first.data).toEqual({ total: 4, hasMore: true, items: expect.any(Array) });
     expect(first.data.items.map((product) => product.id)).toEqual(["prd_lamp", "prd_chair"]);
 
     const second = await service.searchProducts(
@@ -479,7 +486,47 @@ describe("searchProducts", () => {
     );
     if (!second.success) throw new Error(second.error.message);
     expect(second.data.total).toBe(4);
+    expect(second.data.hasMore).toBe(false);
     expect(second.data.items.map((product) => product.id)).toEqual(["prd_oak", "prd_smartdesk"]);
+  });
+
+  it("fills the schema's defaults when the caller passes only filters", async () => {
+    const { service } = setup();
+
+    const result = await service.searchProducts({ q: "desk" });
+    if (!result.success) throw new Error(result.error.message);
+
+    // Default page size and the featured-first default sort. "desk" matches
+    // the SmartDesk name, the Oak name and the lamp's description.
+    expect(result.data.total).toBe(3);
+    expect(result.data.items.map((product) => product.id)).toEqual([
+      "prd_smartdesk",
+      "prd_lamp",
+      "prd_oak",
+    ]);
+  });
+
+  it("rejects a query outside the schema's bounds", async () => {
+    const { service } = setup();
+
+    const notFound = {
+      success: false,
+      error: { code: "invalid_product_query", message: "Invalid product query" },
+    } as const;
+
+    // A negative page size would read as no limit in SQLite and dump the
+    // whole catalog into one page.
+    await expect(service.searchProducts(makeQuery({ pageSize: -1 }))).resolves.toEqual(notFound);
+    await expect(service.searchProducts(makeQuery({ pageSize: 0 }))).resolves.toEqual(notFound);
+    // Past 48 products a page would blow the D1 bound-parameter limit.
+    await expect(service.searchProducts(makeQuery({ pageSize: 49 }))).resolves.toEqual(notFound);
+    await expect(service.searchProducts(makeQuery({ page: 0 }))).resolves.toEqual(notFound);
+    const badSort = { ...makeQuery(), sort: "cheapest" } as unknown as ProductQuery;
+    await expect(service.searchProducts(badSort)).resolves.toEqual(notFound);
+    // Over the word cap: the service honours every word or rejects the query.
+    await expect(
+      service.searchProducts(makeQuery({ q: "one two three four five six seven eight nine" })),
+    ).resolves.toEqual(notFound);
   });
 
   it("keeps the page up when one product's data is malformed", async () => {
@@ -496,14 +543,50 @@ describe("searchProducts", () => {
     if (!result.success) throw new Error(result.error.message);
 
     // SQL counts every matching row, valid or not; only rows that can be
-    // shaped into a product reach the page.
+    // shaped into a product reach the page. The whole catalog still fits one
+    // page, so the short page is also the last one.
     expect(result.data.total).toBe(5);
+    expect(result.data.hasMore).toBe(false);
     expect(result.data.items.map((product) => product.id)).toEqual([
       "prd_lamp",
       "prd_chair",
       "prd_oak",
       "prd_smartdesk",
     ]);
+  });
+
+  it("keeps paging when a dropped row shortens a page", async () => {
+    const context = setup();
+    // The invalid row sorts first among the paged ones, onto page 1.
+    insertProduct(context, {
+      id: "prd_paged_broken",
+      name: "Paged Desk 00",
+      images: [],
+    });
+    for (let i = 1; i <= 12; i++) {
+      insertProduct(context, {
+        id: `prd_paged_${String(i).padStart(2, "0")}`,
+        name: `Paged Desk ${String(i).padStart(2, "0")}`,
+      });
+    }
+    const { service } = context;
+
+    const first = await service.searchProducts(makeQuery({ sort: "name_asc", pageSize: 12 }));
+    if (!first.success) throw new Error(first.error.message);
+
+    // 17 matching rows, 16 valid; the dropped row makes page 1 hold 11 items.
+    expect(first.data.total).toBe(17);
+    expect(first.data.items).toHaveLength(11);
+    expect(first.data.hasMore).toBe(true);
+
+    const second = await service.searchProducts(
+      makeQuery({ sort: "name_asc", page: 2, pageSize: 12 }),
+    );
+    if (!second.success) throw new Error(second.error.message);
+
+    expect(second.data.items).toHaveLength(5);
+    expect(second.data.items.map((product) => product.id)).toContain("prd_paged_12");
+    expect(second.data.hasMore).toBe(false);
   });
 
   it("reports a read failure instead of throwing", async () => {
@@ -526,7 +609,7 @@ describe("getProductById", () => {
 
     expect(result.data).toMatchObject({
       id: "prd_smartdesk",
-      slug: "prd_smartdesk",
+      slug: "smartdesk-pro",
       name: "SmartDesk Pro",
       category: { id: "cat_desks", slug: "desks", name: "Desks" },
       prices: [
@@ -590,32 +673,39 @@ describe("getProductBySlug", () => {
   it("resolves a route slug to the full product", async () => {
     const { service } = setup();
 
-    const result = await service.getProductBySlug("prd_smartdesk");
+    const result = await service.getProductBySlug("smartdesk-pro");
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data).toMatchObject({
       id: "prd_smartdesk",
-      slug: "prd_smartdesk",
+      slug: "smartdesk-pro",
       name: "SmartDesk Pro",
       category: { id: "cat_desks", slug: "desks", name: "Desks" },
     });
   });
 
-  it("fails when the product does not exist", async () => {
+  it("looks up the slug column, not the id column", async () => {
     const { service } = setup();
 
-    await expect(service.getProductBySlug("smartdesk-pro")).resolves.toEqual({
+    // A slug that matches no product.
+    await expect(service.getProductBySlug("missing-desk")).resolves.toEqual({
       success: false,
-      error: { code: "product_not_found", message: "Product smartdesk-pro not found" },
+      error: { code: "product_not_found", message: "Product missing-desk not found" },
+    });
+
+    // An id is not a slug: prd_smartdesk's slug is smartdesk-pro.
+    await expect(service.getProductBySlug("prd_smartdesk")).resolves.toEqual({
+      success: false,
+      error: { code: "product_not_found", message: "Product prd_smartdesk not found" },
     });
   });
 
   it("does not serve archived products either, so a deep link to one is dead", async () => {
     const { service } = setup();
 
-    await expect(service.getProductBySlug("prd_archived")).resolves.toEqual({
+    await expect(service.getProductBySlug("archived-desk")).resolves.toEqual({
       success: false,
-      error: { code: "product_not_found", message: "Product prd_archived not found" },
+      error: { code: "product_not_found", message: "Product archived-desk not found" },
     });
   });
 });

@@ -116,8 +116,7 @@ export type ProductSort = z.infer<typeof productSortSchema>;
 
 /**
  * Words a free-text search may carry. The service folds and counts tokens the
- * same way, so this is the bound a caller's parse enforces before `q` reaches
- * the query.
+ * same way, and rejects a `q` beyond this cap with `invalid_product_query`.
  */
 export const maxSearchTokens = 8;
 
@@ -156,7 +155,11 @@ export const productQuerySchema = z.object({
     ),
 });
 
-export type ProductQuery = z.infer<typeof productQuerySchema>;
+/**
+ * What a caller may pass: the filters are optional because the service parses
+ * the query itself and fills the schema's defaults.
+ */
+export type ProductQuery = z.input<typeof productQuerySchema>;
 
 export const productPageSchema = paginationSchema(productSchema);
 
