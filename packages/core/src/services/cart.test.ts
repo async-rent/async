@@ -448,6 +448,24 @@ describe("addItem", () => {
       error: { code: "failed_to_fetch_cart", message: "Failed to fetch cart" },
     });
   });
+
+  it("reports invalid data from a write instead of throwing", async () => {
+    const { service, sqlite } = setup();
+
+    // The DB's `>= 0` check allows a fractional price, but `amountSchema`
+    // requires whole minor units — so the write lands and the shaped cart is
+    // what the domain schema rejects.
+    sqlite.exec(
+      `UPDATE product_prices SET weekly_price = 1.5 WHERE product_id = 'prd_smartdesk' AND location_id = 'loc_bali'`,
+    );
+
+    await expect(
+      service.addItem({ locationId: "loc_bali", productId: "prd_smartdesk", quantity: 1 }),
+    ).resolves.toEqual({
+      success: false,
+      error: { code: "cart_data_invalid", message: expect.stringContaining("has invalid data") },
+    });
+  });
 });
 
 describe("updateItemQuantity", () => {
@@ -691,5 +709,142 @@ describe("getCart", () => {
       success: false,
       error: { code: "cart_data_invalid", message: `Cart ${added.data.id} has invalid data` },
     });
+  });
+
+  it("keeps one total when a city's delivery fee changes", async () => {
+    const { service, sqlite } = setup();
+
+    const added = await service.addItem({
+      locationId: "loc_bali",
+      productId: "prd_smartdesk",
+      quantity: 1,
+    });
+    if (!added.success) throw new Error(added.error.message);
+    expect(added.data.summary).toMatchObject({ deliveryFee: 5000, totalDueToday: 41000 });
+
+    // The delivery fee is not snapshotted on a line, so a read must recompute
+    // it: the stored row and a later write must never quote two different totals.
+    sqlite.exec(
+      `UPDATE product_prices SET delivery_fee = 9000 WHERE product_id = 'prd_smartdesk' AND location_id = 'loc_bali'`,
+    );
+
+    const read = await service.getCart(added.data.id);
+    if (!read.success) throw new Error(read.error.message);
+    expect(read.data.summary).toMatchObject({ deliveryFee: 9000, totalDueToday: 45000 });
+
+    const merged = await service.addItem({
+      cartId: added.data.id,
+      locationId: "loc_bali",
+      productId: "prd_lamp",
+      quantity: 1,
+    });
+    if (!merged.success) throw new Error(merged.error.message);
+
+    // 12000 + 4000 weekly, 24000 deposit, max(9000, 1000) delivery.
+    expect(merged.data.summary).toEqual({
+      currency: "USD",
+      weeklySubtotal: 16000,
+      deposit: 24000,
+      deliveryFee: 9000,
+      discount: 0,
+      totalDueToday: 49000,
+      recurringWeekly: 16000,
+    });
+  });
+});
+
+describe("cart ownership and concurrent adds", () => {
+  it("claims an unowned cart for a signed-in visitor", async () => {
+    const { service } = setup();
+
+    const guest = await service.addItem({
+      locationId: "loc_bali",
+      productId: "prd_lamp",
+      quantity: 1,
+    });
+    if (!guest.success) throw new Error(guest.error.message);
+    expect(guest.data.customerId).toBeUndefined();
+
+    const claimed = await service.addItem({
+      cartId: guest.data.id,
+      customerId: "user_01",
+      locationId: "loc_bali",
+      productId: "prd_chair",
+      quantity: 1,
+    });
+    if (!claimed.success) throw new Error(claimed.error.message);
+    expect(claimed.data.customerId).toBe("user_01");
+
+    // A later add without a cart id finds the now-owned cart, not a second one.
+    const again = await service.addItem({
+      customerId: "user_01",
+      locationId: "loc_bali",
+      productId: "prd_lamp",
+      quantity: 1,
+    });
+    if (!again.success) throw new Error(again.error.message);
+    expect(again.data.id).toBe(guest.data.id);
+  });
+
+  it("refuses a cart owned by another customer", async () => {
+    const { service } = setup();
+
+    const owned = await service.addItem({
+      customerId: "user_01",
+      locationId: "loc_bali",
+      productId: "prd_lamp",
+      quantity: 1,
+    });
+    if (!owned.success) throw new Error(owned.error.message);
+
+    await expect(
+      service.addItem({
+        cartId: owned.data.id,
+        customerId: "user_02",
+        locationId: "loc_bali",
+        productId: "prd_chair",
+        quantity: 1,
+      }),
+    ).resolves.toEqual({
+      success: false,
+      error: {
+        code: "cart_forbidden",
+        message: `Cart ${owned.data.id} belongs to another customer`,
+      },
+    });
+  });
+
+  it("lands both of two overlapping adds of the same product", async () => {
+    const { service } = setup();
+
+    const cart = await service.addItem({
+      locationId: "loc_bali",
+      productId: "prd_smartdesk",
+      quantity: 1,
+    });
+    if (!cart.success) throw new Error(cart.error.message);
+
+    // Both calls read the cart before either writes, so both try to open the
+    // same line; the loser retries and merges.
+    const results = await Promise.all([
+      service.addItem({
+        cartId: cart.data.id,
+        locationId: "loc_bali",
+        productId: "prd_lamp",
+        quantity: 1,
+      }),
+      service.addItem({
+        cartId: cart.data.id,
+        locationId: "loc_bali",
+        productId: "prd_lamp",
+        quantity: 1,
+      }),
+    ]);
+
+    expect(results.every((result) => result.success)).toBe(true);
+
+    const read = await service.getCart(cart.data.id);
+    if (!read.success) throw new Error(read.error.message);
+    expect(read.data.items.find((item) => item.productId === "prd_lamp")?.quantity).toBe(2);
   });
 });

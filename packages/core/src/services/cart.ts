@@ -6,7 +6,7 @@ import type {
   ProductPriceRow,
   ProductRow,
 } from "@async-rent/db";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
 import type {
@@ -32,8 +32,11 @@ export interface CreateCartServiceOptions {
  * cart is also single-currency, matching `chargeSummarySchema`.
  *
  * Line prices are snapshotted from the cart's city when a product is added, so
- * a later catalog edit never rewrites a cart the visitor is already looking at.
- * The cart row keeps the rolled-up summary, recomputed on every change.
+ * a later catalog edit never rewrites a line. The delivery fee is the one
+ * amount that is not a line price; it is read from the cart's city on every
+ * total, and every operation recomputes the totals rather than trusting the
+ * summary stored on the row. A cart therefore has exactly one total — what a
+ * read returns is what the next write would store, and what a checkout captures.
  */
 
 function toCartItem(row: CartItemRow): CartItem {
@@ -111,6 +114,20 @@ function summarize(
   };
 }
 
+/**
+ * How many times an add re-reads and retries after a failed write. A racing add
+ * can claim a position first; the retry then finds that line and merges instead
+ * of failing the whole call.
+ */
+const maxWriteAttempts = 3;
+
+/** A cart shaped for a caller, or why it could not be. */
+type CartRead =
+  | { status: "ok"; cart: Cart }
+  | { status: "not_found" }
+  | { status: "read_failed" }
+  | { status: "invalid" };
+
 export function createCartService({ db }: CreateCartServiceOptions) {
   const getCartResult = createResult(
     cartSchema,
@@ -121,12 +138,14 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     cartSchema,
     z.enum([
       "cart_not_found",
+      "cart_forbidden",
       "cart_city_mismatch",
       "cart_currency_mismatch",
       "product_not_available",
       "failed_to_fetch_product",
       "failed_to_fetch_cart",
       "failed_to_save_cart",
+      "cart_data_invalid",
     ]),
   );
 
@@ -137,6 +156,7 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       "cart_item_not_found",
       "failed_to_fetch_cart",
       "failed_to_save_cart",
+      "cart_data_invalid",
     ]),
   );
 
@@ -147,8 +167,19 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       "cart_item_not_found",
       "failed_to_fetch_cart",
       "failed_to_save_cart",
+      "cart_data_invalid",
     ]),
   );
+
+  /** The shared failed branch of a read that did not produce a valid cart. */
+  function failedRead(read: CartRead, key: string) {
+    if (read.status === "not_found")
+      return { code: "cart_not_found", message: `Cart ${key} not found` } as const;
+    if (read.status === "read_failed")
+      return { code: "failed_to_fetch_cart", message: "Failed to fetch cart" } as const;
+
+    return { code: "cart_data_invalid", message: `Cart ${key} has invalid data` } as const;
+  }
 
   /** The cart row, or `undefined` when no cart has that id. */
   async function loadCartRow(cartId: string): Promise<CartRow | null | undefined> {
@@ -209,7 +240,7 @@ export function createCartService({ db }: CreateCartServiceOptions) {
   /**
    * Delivers the per-city delivery fees the summary needs, keyed by product.
    * Delivery is the one amount not snapshotted on a line, so it is read from
-   * the cart's city on every recompute.
+   * the cart's city on every total.
    */
   async function loadDeliveryFees(
     locationId: string,
@@ -228,6 +259,34 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     if (!rows) return null;
 
     return new Map(rows.map((row) => [row.productId, row.deliveryFee ?? 0]));
+  }
+
+  /** Recomputes a cart's money from its lines and the city's delivery fees. */
+  async function summarizeFor(cart: CartRow, items: CartItemRow[]): Promise<ChargeSummary | null> {
+    const fees = await loadDeliveryFees(cart.locationId, distinctProductIds(items));
+
+    if (!fees) return null;
+
+    return summarize(cart, items, fees);
+  }
+
+  /**
+   * The one way a cart reaches a caller: re-read the row, recompute its totals,
+   * and only shape the domain cart once it parses. Every operation ends here,
+   * so a row the domain schema rejects is a `cart_data_invalid` failure, never
+   * a `ZodError` thrown out of `success()`.
+   */
+  async function readCart(cartId: string): Promise<CartRead> {
+    const loaded = await loadCart(cartId);
+    if (loaded === null) return { status: "read_failed" };
+    if (!loaded) return { status: "not_found" };
+
+    const summary = await summarizeFor(loaded.row, loaded.items);
+    if (!summary) return { status: "read_failed" };
+
+    const cart = toCart({ ...loaded.row, ...summary }, loaded.items);
+
+    return cartSchema.safeParse(cart).success ? { status: "ok", cart } : { status: "invalid" };
   }
 
   interface ProductOffer {
@@ -312,15 +371,11 @@ export function createCartService({ db }: CreateCartServiceOptions) {
   async function getCart(cartId: string): Promise<z.infer<(typeof getCartResult)["schema"]>> {
     const { success, failed } = getCartResult;
 
-    const loaded = await loadCart(cartId);
-    if (loaded === null) return failed("failed_to_fetch_cart", "Failed to fetch cart");
-    if (!loaded) return failed("cart_not_found", `Cart ${cartId} not found`);
+    const read = await readCart(cartId);
+    if (read.status === "ok") return success(read.cart);
 
-    const cart = toCart(loaded.row, loaded.items);
-    const parsed = cartSchema.safeParse(cart);
-    if (!parsed.success) return failed("cart_data_invalid", `Cart ${cartId} has invalid data`);
-
-    return success(cart);
+    const failure = failedRead(read, cartId);
+    return failed(failure.code, failure.message);
   }
 
   async function addItem(input: AddCartItem): Promise<z.infer<(typeof addItemResult)["schema"]>> {
@@ -337,6 +392,8 @@ export function createCartService({ db }: CreateCartServiceOptions) {
 
       if (locationId !== found.locationId)
         return failed("cart_city_mismatch", `Cart ${cartId} is for another city`);
+      if (found.customerId && customerId && found.customerId !== customerId)
+        return failed("cart_forbidden", `Cart ${cartId} belongs to another customer`);
 
       row = found;
     } else if (customerId) {
@@ -370,54 +427,73 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       return failed("cart_currency_mismatch", `Cart ${row.id} is priced in ${row.currency}`);
     }
 
-    const loadedCart = await loadCart(row.id);
-    if (loadedCart === null) return failed("failed_to_fetch_cart", "Failed to fetch cart");
-    if (!loadedCart) return failed("cart_not_found", `Cart ${row.id} not found`);
+    // A signed-in visitor claims an unowned cart, so their gear stays in one
+    // cart once they sign in instead of splitting off a second one.
+    const owner = row.customerId ?? customerId;
 
-    const { items } = loadedCart;
-    const existingLine = items.find((item) => item.productId === productId);
+    for (let attempt = 0; attempt < maxWriteAttempts; attempt++) {
+      const loadedCart = await loadCart(row.id);
+      if (loadedCart === null) return failed("failed_to_fetch_cart", "Failed to fetch cart");
+      if (!loadedCart) return failed("cart_not_found", `Cart ${row.id} not found`);
 
-    // A repeated product merges into its line rather than stacking a second one.
-    let lineWrite;
-    if (existingLine) {
-      existingLine.quantity += quantity;
-      lineWrite = db
-        .update(cartItems)
-        .set({ quantity: existingLine.quantity })
-        .where(and(eq(cartItems.cartId, row.id), eq(cartItems.productId, productId)));
-    } else {
-      const newLine: CartItemRow = {
-        cartId: row.id,
-        position: nextPosition(items),
-        productId: product.id,
-        name: product.name,
-        slug: product.slug,
-        imageUrl: image?.url ?? null,
-        imageAlt: image?.alt ?? null,
-        quantity,
-        weeklyPrice: price.weeklyPrice,
-        deposit: price.deposit ?? null,
-      };
+      const { items } = loadedCart;
+      const existingLine = items.find((item) => item.productId === productId);
 
-      items.push(newLine);
-      lineWrite = db.insert(cartItems).values(newLine);
+      let mergedItems: CartItemRow[];
+      let lineWrite;
+
+      if (existingLine) {
+        // A repeated product merges with a relative increment, so two
+        // overlapping adds both count instead of writing the same total over
+        // each other.
+        mergedItems = items.map((item) =>
+          item.productId === productId ? { ...item, quantity: item.quantity + quantity } : item,
+        );
+        lineWrite = db
+          .update(cartItems)
+          .set({ quantity: sql`${cartItems.quantity} + ${quantity}` })
+          .where(and(eq(cartItems.cartId, row.id), eq(cartItems.productId, productId)));
+      } else {
+        const newLine: CartItemRow = {
+          cartId: row.id,
+          position: nextPosition(items),
+          productId: product.id,
+          name: product.name,
+          slug: product.slug,
+          imageUrl: image?.url ?? null,
+          imageAlt: image?.alt ?? null,
+          quantity,
+          weeklyPrice: price.weeklyPrice,
+          deposit: price.deposit ?? null,
+        };
+
+        mergedItems = [...items, newLine];
+        lineWrite = db.insert(cartItems).values(newLine);
+      }
+
+      const summary = await summarizeFor(row, mergedItems);
+      if (!summary) return failed("failed_to_fetch_cart", "Failed to fetch cart");
+
+      const saved = await db
+        .batch([
+          lineWrite,
+          db
+            .update(carts)
+            .set({ ...summary, ...(owner ? { customerId: owner } : {}), updatedAt: new Date() })
+            .where(eq(carts.id, row.id)),
+        ])
+        .catch(() => null);
+
+      if (saved) {
+        const read = await readCart(row.id);
+        if (read.status === "ok") return success(read.cart);
+
+        const failure = failedRead(read, row.id);
+        return failed(failure.code, failure.message);
+      }
     }
 
-    const summary = await summarizeFor(row, items);
-    if (summary === null) return failed("failed_to_fetch_cart", "Failed to fetch cart");
-
-    const saved = await db
-      .batch([
-        lineWrite,
-        db
-          .update(carts)
-          .set({ ...summary, updatedAt: new Date() })
-          .where(eq(carts.id, row.id)),
-      ])
-      .catch(() => null);
-    if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
-
-    return success(toCart({ ...row, ...summary }, items));
+    return failed("failed_to_save_cart", "Failed to save cart");
   }
 
   async function updateItemQuantity(
@@ -435,9 +511,11 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     if (!line)
       return failed("cart_item_not_found", `Product ${productId} is not in cart ${cartId}`);
 
-    line.quantity = quantity;
+    const nextItems = items.map((item) =>
+      item.productId === productId ? { ...item, quantity } : item,
+    );
 
-    const summary = await summarizeFor(row, items);
+    const summary = await summarizeFor(row, nextItems);
     if (summary === null) return failed("failed_to_fetch_cart", "Failed to fetch cart");
 
     const saved = await db
@@ -454,7 +532,11 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       .catch(() => null);
     if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
 
-    return success(toCart({ ...row, ...summary }, items));
+    const read = await readCart(cartId);
+    if (read.status === "ok") return success(read.cart);
+
+    const failure = failedRead(read, cartId);
+    return failed(failure.code, failure.message);
   }
 
   async function removeItem(
@@ -490,16 +572,11 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       .catch(() => null);
     if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
 
-    return success(toCart({ ...row, ...summary }, remaining));
-  }
+    const read = await readCart(cartId);
+    if (read.status === "ok") return success(read.cart);
 
-  /** Recomputes a cart's money, reading the city's delivery fees. */
-  async function summarizeFor(cart: CartRow, items: CartItemRow[]): Promise<ChargeSummary | null> {
-    const fees = await loadDeliveryFees(cart.locationId, distinctProductIds(items));
-
-    if (!fees) return null;
-
-    return summarize(cart, items, fees);
+    const failure = failedRead(read, cartId);
+    return failed(failure.code, failure.message);
   }
 
   return {
