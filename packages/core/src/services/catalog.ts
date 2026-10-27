@@ -19,7 +19,7 @@ import {
 import type { SQL } from "drizzle-orm";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { DrizzleD1Database } from "drizzle-orm/d1";
-import type { AnySQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Category, Location, Product, ProductSort } from "../types";
 import {
@@ -198,11 +198,6 @@ function groupByProductId<TRow extends { productId: string }>(rows: TRow[]): Map
 }
 
 export function createCatalogService({ db }: CreateCatalogServiceOptions) {
-  const createProductResult = createResult(
-    z.void(),
-    z.enum(["product_already_exists", "failed_to_fetch_product", "failed_to_save_product"]),
-  );
-
   const searchProductsResult = createResult(
     productPageSchema,
     z.enum(["failed_to_search_products"]),
@@ -222,33 +217,6 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     z.array(categorySchema),
     z.enum(["failed_to_list_categories"]),
   );
-
-  const productsTable = {} as SQLiteTable;
-
-  async function createProduct(
-    product: Product,
-  ): Promise<z.infer<(typeof createProductResult)["schema"]>> {
-    const { success, failed } = createProductResult;
-
-    const existingProducts = await db
-      .select()
-      .from(productsTable)
-      .catch(() => null);
-    if (!existingProducts) return failed("failed_to_fetch_product", "Failed to fetch product");
-
-    const [existingProduct] = existingProducts;
-    if (existingProduct)
-      return failed("product_already_exists", `Product with id ${product.id} already exists`);
-
-    const saveProduct = await db
-      .insert(productsTable)
-      .values({})
-      .returning({})
-      .catch(() => null);
-    if (!saveProduct) return failed("failed_to_save_product", "Failed to save product");
-
-    return success();
-  }
 
   /**
    * Loads the child rows for a batch of products in one round of queries, so a
@@ -429,7 +397,6 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   }
 
   return {
-    createProduct,
     searchProducts,
     getProductById,
     getProductBySlug,
