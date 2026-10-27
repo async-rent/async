@@ -1,11 +1,5 @@
 import { z } from "zod";
-import {
-  amountSchema,
-  currencyCodeSchema,
-  imageSchema,
-  timestampsSchema,
-  paginationSchema,
-} from "../utils";
+import { amountSchema, imageSchema, paginationSchema, timestampsSchema } from "../utils";
 
 /**
  * Catalog: the cities Async operates in and the gear available there.
@@ -40,14 +34,6 @@ export const categorySchema = z.object({
 
 export type Category = z.infer<typeof categorySchema>;
 
-export const categoryRefSchema = categorySchema.pick({
-  id: true,
-  slug: true,
-  name: true,
-});
-
-export type CategoryRef = z.infer<typeof categoryRefSchema>;
-
 /**
  * A product's price and stock in one city.
  *
@@ -56,7 +42,6 @@ export type CategoryRef = z.infer<typeof categoryRefSchema>;
  */
 export const productPriceSchema = z.object({
   locationId: z.string().describe("Stable location id this price applies to."),
-  currency: currencyCodeSchema.describe("Currency every amount in this row is quoted in."),
   weeklyPrice: amountSchema.describe("Weekly rental price in this city."),
   deposit: amountSchema.optional().describe("Refundable deposit in this city."),
   deliveryFee: amountSchema
@@ -88,7 +73,7 @@ export const productSchema = z
     name: z.string().describe('Customer-facing name, e.g. "SmartDesk Pro".'),
     tagline: z.string().describe("One-line description shown on catalog cards."),
     description: z.string().describe("Long-form copy for the product page."),
-    category: categoryRefSchema,
+    categoryId: z.string().describe("Stable category id this product related to."),
     images: z.array(imageSchema).min(1),
     prices: z
       .array(productPriceSchema)
@@ -142,7 +127,7 @@ export const productQuerySchema = z.object({
     .optional()
     .describe("Stable location id to filter by; the edge resolves a slug to it."),
   sort: productSortSchema.default("featured"),
-  page: z.number().int().positive().default(1),
+  page: z.number().int().positive().max(100).default(1),
   pageSize: z
     .number()
     .int()

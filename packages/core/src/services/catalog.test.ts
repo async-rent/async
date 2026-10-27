@@ -219,7 +219,7 @@ describe("searchProducts", () => {
     expect(smartdesk).toMatchObject({
       name: "SmartDesk Pro",
       tagline: "Electric standing desk with memory presets",
-      category: { id: "cat_desks", slug: "desks", name: "Desks" },
+      categoryId: "cat_desks",
       images: [
         { url: "https://cdn.async.rent/smartdesk-pro-0.jpg", alt: "SmartDesk Pro" },
         { url: "https://cdn.async.rent/smartdesk-pro-1.jpg", alt: "SmartDesk Pro" },
@@ -227,13 +227,12 @@ describe("searchProducts", () => {
       prices: [
         {
           locationId: "loc_bali",
-          currency: "USD",
           weeklyPrice: 12000,
           deposit: 24000,
           deliveryFee: 5000,
           stock: 3,
         },
-        { locationId: "loc_lisbon", currency: "USD", weeklyPrice: 13000 },
+        { locationId: "loc_lisbon", weeklyPrice: 13000 },
       ],
       highlights: ["Memory presets", "Cable tray"],
       specs: [{ label: "Height range", value: "62–128 cm" }],
@@ -488,7 +487,7 @@ describe("getProductById", () => {
       id: "prd_smartdesk",
       slug: "smartdesk-pro",
       name: "SmartDesk Pro",
-      category: { id: "cat_desks", slug: "desks", name: "Desks" },
+      categoryId: "cat_desks",
       prices: [
         { locationId: "loc_bali", weeklyPrice: 12000 },
         { locationId: "loc_lisbon", weeklyPrice: 13000 },
@@ -557,7 +556,7 @@ describe("getProductBySlug", () => {
       id: "prd_smartdesk",
       slug: "smartdesk-pro",
       name: "SmartDesk Pro",
-      category: { id: "cat_desks", slug: "desks", name: "Desks" },
+      categoryId: "cat_desks",
     });
   });
 

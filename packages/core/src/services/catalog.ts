@@ -157,11 +157,7 @@ function toProduct(row: ProductRow, parts: ProductParts): Product {
     name: row.name,
     tagline: row.tagline,
     description: row.description,
-    category: {
-      id: parts.category.id,
-      slug: parts.category.slug,
-      name: parts.category.name,
-    },
+    categoryId: parts.category.id,
     images: parts.images.map((image) => ({
       url: image.url,
       alt: image.alt ?? undefined,
