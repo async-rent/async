@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createTestDatabase, type TestDatabase } from "../../tests/database";
+import type { Cart, CartItem, ChargeSummary } from "../types";
 import { createCartService } from "./cart";
 
 /** A fixed timestamp, so nothing in a fixture depends on the clock. */
@@ -113,13 +114,6 @@ function seedCatalog(database: TestDatabase): void {
   });
 
   insertProduct(database, {
-    id: "prd_sofa",
-    name: "Lounge Sofa",
-    slug: "lounge-sofa",
-    prices: [{ locationId: "loc_bali", weeklyPrice: 30000, deliveryFee: 8000 }],
-  });
-
-  insertProduct(database, {
     id: "prd_archived",
     name: "Archived Desk",
     slug: "archived-desk",
@@ -127,8 +121,8 @@ function seedCatalog(database: TestDatabase): void {
     prices: [{ locationId: "loc_bali", weeklyPrice: 1000 }],
   });
 
-  // The one non-USD row: a cart is single-currency, so adding it to a USD cart
-  // must be refused.
+  // The one non-USD row: a cart is single-currency, so it cannot join a USD
+  // cart in the same city.
   insertProduct(database, {
     id: "prd_lisbon_desk",
     name: "Lisbon Desk",
@@ -144,146 +138,205 @@ function setup() {
   return { ...database, service: createCartService({ db: database.db }) };
 }
 
-describe("addItem", () => {
-  it("opens a cart and snapshots the line from the city's price", async () => {
-    const { service } = setup();
+interface ItemFixture {
+  productId: string;
+  weeklyPrice: number;
+  quantity?: number;
+  deposit?: number;
+  name?: string;
+}
 
-    const result = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
+/**
+ * A cart as the app would hand it over: lines carry their price snapshot, and
+ * the summary is what those lines add up to unless a test overrides a field to
+ * break a rule.
+ */
+function cartFixture(
+  input: {
+    id?: string;
+    customerId?: string;
+    locationId?: string;
+    currency?: string;
+    items?: ItemFixture[];
+    deliveryFee?: number;
+    discount?: number;
+    summary?: Partial<ChargeSummary>;
+  } = {},
+): Cart {
+  const items: CartItem[] = (input.items ?? []).map((item) => {
+    const name = item.name ?? item.productId;
+
+    return {
+      productId: item.productId,
+      name,
+      slug: item.productId,
+      image: { url: `https://cdn.async.rent/${item.productId}-0.jpg`, alt: name },
+      quantity: item.quantity ?? 1,
+      weeklyPrice: item.weeklyPrice,
+      ...(item.deposit === undefined ? {} : { deposit: item.deposit }),
+    };
+  });
+
+  const weeklySubtotal = items.reduce((sum, item) => sum + item.weeklyPrice * item.quantity, 0);
+  const deposit = items.reduce((sum, item) => sum + (item.deposit ?? 0) * item.quantity, 0);
+  const deliveryFee = input.deliveryFee ?? 0;
+  const discount = input.discount ?? 0;
+
+  return {
+    id: input.id ?? "cart_1",
+    ...(input.customerId ? { customerId: input.customerId } : {}),
+    locationId: input.locationId ?? "loc_bali",
+    items,
+    summary: {
+      currency: input.currency ?? "USD",
+      weeklySubtotal,
+      deposit,
+      deliveryFee,
+      discount,
+      totalDueToday: weeklySubtotal + deposit + deliveryFee - discount,
+      recurringWeekly: weeklySubtotal,
+      ...input.summary,
+    },
+  };
+}
+
+/** A one-line Bali cart: 12000 weekly, 24000 deposit, 5000 delivery. */
+function smartdeskCart(overrides: Parameters<typeof cartFixture>[0] = {}): Cart {
+  return cartFixture({
+    items: [{ productId: "prd_smartdesk", weeklyPrice: 12000, deposit: 24000 }],
+    deliveryFee: 5000,
+    ...overrides,
+  });
+}
+
+function storedCartRow({ sqlite }: TestDatabase, cartId: string) {
+  return sqlite
+    .prepare(
+      `SELECT id, customer_id AS customerId, location_id AS locationId, currency,
+              weekly_subtotal AS weeklySubtotal, deposit, delivery_fee AS deliveryFee,
+              discount, total_due_today AS totalDueToday, recurring_weekly AS recurringWeekly,
+              created_at AS createdAt, updated_at AS updatedAt
+       FROM carts WHERE id = ?`,
+    )
+    .get(cartId) as Record<string, unknown> | undefined;
+}
+
+function storedCartItems({ sqlite }: TestDatabase, cartId: string) {
+  return sqlite
+    .prepare(
+      `SELECT position, product_id AS productId, name, slug, image_url AS imageUrl,
+              image_alt AS imageAlt, quantity, weekly_price AS weeklyPrice, deposit
+       FROM cart_items WHERE cart_id = ? ORDER BY position`,
+    )
+    .all(cartId) as Record<string, unknown>[];
+}
+
+describe("createCart", () => {
+  it("stores the cart row and its lines", async () => {
+    const database = setup();
+    const { service } = database;
+
+    const cart = cartFixture({
+      id: "cart_1",
+      customerId: "user_01",
+      items: [
+        { productId: "prd_smartdesk", weeklyPrice: 12000, deposit: 24000 },
+        { productId: "prd_chair", weeklyPrice: 6000, deposit: 12000, quantity: 2 },
+      ],
+      deliveryFee: 5000,
     });
+
+    const result = await service.createCart(cart);
     if (!result.success) throw new Error(result.error.message);
 
-    expect(result.data.id).toMatch(/^cart_/);
-    expect(result.data.locationId).toBe("loc_bali");
-    expect(result.data.customerId).toBeUndefined();
-    expect(result.data.items).toEqual([
+    expect(result.data).toEqual(cart);
+
+    expect(storedCartRow(database, "cart_1")).toMatchObject({
+      customerId: "user_01",
+      locationId: "loc_bali",
+      currency: "USD",
+      weeklySubtotal: 24000,
+      deposit: 48000,
+      deliveryFee: 5000,
+      discount: 0,
+      totalDueToday: 77000,
+      recurringWeekly: 24000,
+    });
+
+    expect(storedCartItems(database, "cart_1")).toEqual([
       {
+        position: 0,
         productId: "prd_smartdesk",
-        name: "SmartDesk Pro",
-        slug: "smartdesk-pro",
-        image: { url: "https://cdn.async.rent/prd_smartdesk-0.jpg", alt: "SmartDesk Pro" },
+        name: "prd_smartdesk",
+        slug: "prd_smartdesk",
+        imageUrl: "https://cdn.async.rent/prd_smartdesk-0.jpg",
+        imageAlt: "prd_smartdesk",
         quantity: 1,
         weeklyPrice: 12000,
         deposit: 24000,
       },
+      {
+        position: 1,
+        productId: "prd_chair",
+        name: "prd_chair",
+        slug: "prd_chair",
+        imageUrl: "https://cdn.async.rent/prd_chair-0.jpg",
+        imageAlt: "prd_chair",
+        quantity: 2,
+        weeklyPrice: 6000,
+        deposit: 12000,
+      },
     ]);
-    expect(result.data.summary).toEqual({
-      currency: "USD",
-      weeklySubtotal: 12000,
-      deposit: 24000,
-      deliveryFee: 5000,
-      discount: 0,
-      totalDueToday: 41000,
-      recurringWeekly: 12000,
-    });
   });
 
-  it("merges a repeated product into its line", async () => {
-    const { service } = setup();
+  it("stores an empty cart", async () => {
+    const database = setup();
+    const { service } = database;
 
-    const first = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!first.success) throw new Error(first.error.message);
-
-    const second = await service.addItem({
-      cartId: first.data.id,
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 2,
-    });
-    if (!second.success) throw new Error(second.error.message);
-
-    expect(second.data.items).toHaveLength(1);
-    expect(second.data.items[0]?.quantity).toBe(3);
-    expect(second.data.summary).toEqual({
-      currency: "USD",
-      weeklySubtotal: 36000,
-      deposit: 72000,
-      deliveryFee: 5000,
-      discount: 0,
-      totalDueToday: 113000,
-      recurringWeekly: 36000,
-    });
-  });
-
-  it("sums the weekly price and deposit across lines but bills delivery once", async () => {
-    const { service } = setup();
-
-    const first = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!first.success) throw new Error(first.error.message);
-
-    const second = await service.addItem({
-      cartId: first.data.id,
-      locationId: "loc_bali",
-      productId: "prd_chair",
-      quantity: 1,
-    });
-    if (!second.success) throw new Error(second.error.message);
-
-    // 12000 + 6000 = 18000 weekly; 24000 + 12000 = 36000 deposit; the delivery
-    // fee is the pricier of the two items (5000), not 5000 + 2000.
-    expect(second.data.summary).toEqual({
-      currency: "USD",
-      weeklySubtotal: 18000,
-      deposit: 36000,
-      deliveryFee: 5000,
-      discount: 0,
-      totalDueToday: 59000,
-      recurringWeekly: 18000,
-    });
-
-    // A third line with the largest fee still does not stack.
-    const third = await service.addItem({
-      cartId: first.data.id,
-      locationId: "loc_bali",
-      productId: "prd_sofa",
-      quantity: 1,
-    });
-    if (!third.success) throw new Error(third.error.message);
-
-    expect(third.data.items.map((item) => item.productId)).toEqual([
-      "prd_smartdesk",
-      "prd_chair",
-      "prd_sofa",
-    ]);
-    expect(third.data.summary.deliveryFee).toBe(8000);
-  });
-
-  it("quotes the totals from the cart's own city", async () => {
-    const { service } = setup();
-
-    const result = await service.addItem({
-      locationId: "loc_lisbon",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
+    const cart = cartFixture({ id: "cart_empty" });
+    const result = await service.createCart(cart);
     if (!result.success) throw new Error(result.error.message);
 
-    expect(result.data.summary).toEqual({
-      currency: "USD",
-      weeklySubtotal: 13000,
-      deposit: 26000,
-      deliveryFee: 1500,
-      discount: 0,
-      totalDueToday: 40500,
-      recurringWeekly: 13000,
+    expect(result.data).toEqual(cart);
+    expect(storedCartRow(database, "cart_empty")).toMatchObject({
+      weeklySubtotal: 0,
+      deposit: 0,
+      deliveryFee: 0,
+      totalDueToday: 0,
+      recurringWeekly: 0,
+    });
+    expect(storedCartItems(database, "cart_empty")).toEqual([]);
+  });
+
+  it("rejects an id that is already taken", async () => {
+    const { service } = setup();
+
+    const first = await service.createCart(smartdeskCart({ id: "cart_1" }));
+    if (!first.success) throw new Error(first.error.message);
+
+    await expect(service.createCart(smartdeskCart({ id: "cart_1" }))).resolves.toEqual({
+      success: false,
+      error: { code: "cart_already_exists", message: "Cart cart_1 already exists" },
     });
   });
 
-  it("refuses a product that is not rentable in the city", async () => {
+  it("rejects a city that does not exist", async () => {
     const { service } = setup();
 
+    await expect(service.createCart(cartFixture({ locationId: "loc_nowhere" }))).resolves.toEqual({
+      success: false,
+      error: { code: "location_not_found", message: "Location loc_nowhere not found" },
+    });
+  });
+
+  it("rejects a product that is not rentable in the city", async () => {
+    const { service } = setup();
+
+    // Archived in Bali, and priced only in Bali while the cart is in Lisbon.
     await expect(
-      service.addItem({ locationId: "loc_bali", productId: "prd_archived", quantity: 1 }),
+      service.createCart(
+        cartFixture({ items: [{ productId: "prd_archived", weeklyPrice: 1000 }] }),
+      ),
     ).resolves.toEqual({
       success: false,
       error: {
@@ -293,7 +346,12 @@ describe("addItem", () => {
     });
 
     await expect(
-      service.addItem({ locationId: "loc_lisbon", productId: "prd_chair", quantity: 1 }),
+      service.createCart(
+        cartFixture({
+          locationId: "loc_lisbon",
+          items: [{ productId: "prd_chair", weeklyPrice: 6000 }],
+        }),
+      ),
     ).resolves.toEqual({
       success: false,
       error: {
@@ -303,548 +361,215 @@ describe("addItem", () => {
     });
   });
 
-  it("never mixes a second city into a cart", async () => {
-    const { service } = setup();
-
-    const first = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!first.success) throw new Error(first.error.message);
-
-    await expect(
-      service.addItem({
-        cartId: first.data.id,
-        locationId: "loc_lisbon",
-        productId: "prd_smartdesk",
-        quantity: 1,
-      }),
-    ).resolves.toEqual({
-      success: false,
-      error: {
-        code: "cart_city_mismatch",
-        message: `Cart ${first.data.id} is for another city`,
-      },
-    });
-
-    const added = await service.addItem({
-      cartId: first.data.id,
-      locationId: "loc_bali",
-      productId: "prd_chair",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
-    expect(added.data.items.map((item) => item.productId)).toEqual(["prd_smartdesk", "prd_chair"]);
-  });
-
   it("keeps a cart single-currency", async () => {
     const { service } = setup();
 
-    // A cart opened on a EUR price is fine; the currency comes from the offer.
-    const euro = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_lisbon_desk",
-      quantity: 1,
-    });
-    if (!euro.success) throw new Error(euro.error.message);
-    expect(euro.data.summary.currency).toBe("EUR");
-
-    // But a USD cart cannot take a EUR line.
-    const usd = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!usd.success) throw new Error(usd.error.message);
-
     await expect(
-      service.addItem({
-        cartId: usd.data.id,
-        locationId: "loc_bali",
-        productId: "prd_lisbon_desk",
-        quantity: 1,
-      }),
+      service.createCart(
+        cartFixture({ items: [{ productId: "prd_lisbon_desk", weeklyPrice: 11000 }] }),
+      ),
     ).resolves.toEqual({
       success: false,
       error: {
         code: "cart_currency_mismatch",
-        message: `Cart ${usd.data.id} is priced in USD`,
+        message: "Product prd_lisbon_desk is priced in EUR, not USD",
       },
     });
   });
 
-  it("reuses a signed-in visitor's cart for the city", async () => {
+  it("bills delivery once for the order, not per line", async () => {
     const { service } = setup();
 
-    const first = await service.addItem({
-      customerId: "user_01",
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    if (!first.success) throw new Error(first.error.message);
+    const items: ItemFixture[] = [
+      { productId: "prd_smartdesk", weeklyPrice: 12000, deposit: 24000 },
+      { productId: "prd_chair", weeklyPrice: 6000, deposit: 12000 },
+    ];
 
-    const second = await service.addItem({
-      customerId: "user_01",
-      locationId: "loc_bali",
-      productId: "prd_chair",
-      quantity: 1,
-    });
-    if (!second.success) throw new Error(second.error.message);
-
-    expect(second.data.id).toBe(first.data.id);
-    expect(second.data.customerId).toBe("user_01");
-    expect(second.data.items.map((item) => item.productId)).toEqual(["prd_lamp", "prd_chair"]);
-  });
-
-  it("keeps guest carts apart", async () => {
-    const { service } = setup();
-
-    const first = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    const second = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_chair",
-      quantity: 1,
-    });
-    if (!first.success || !second.success) throw new Error("add failed");
-
-    expect(first.data.id).not.toBe(second.data.id);
-  });
-
-  it("fails when the cart does not exist", async () => {
-    const { service } = setup();
-
-    await expect(
-      service.addItem({
-        cartId: "cart_missing",
-        locationId: "loc_bali",
-        productId: "prd_smartdesk",
-        quantity: 1,
-      }),
-    ).resolves.toEqual({
+    // The fees are 5000 and 2000; a summary that adds them is rejected.
+    await expect(service.createCart(cartFixture({ items, deliveryFee: 7000 }))).resolves.toEqual({
       success: false,
-      error: { code: "cart_not_found", message: "Cart cart_missing not found" },
+      error: {
+        code: "cart_summary_mismatch",
+        message: "Cart cart_1 summary does not match its lines",
+      },
     });
+
+    const result = await service.createCart(cartFixture({ items, deliveryFee: 5000 }));
+    expect(result.success).toBe(true);
   });
 
-  it("reports a read failure instead of throwing", async () => {
-    const { service, sqlite } = setup();
-    sqlite.close();
-
-    await expect(
-      service.addItem({
-        cartId: "cart_any",
-        locationId: "loc_bali",
-        productId: "prd_smartdesk",
-        quantity: 1,
-      }),
-    ).resolves.toEqual({
-      success: false,
-      error: { code: "failed_to_fetch_cart", message: "Failed to fetch cart" },
-    });
-  });
-
-  it("reports invalid data from a write instead of throwing", async () => {
-    const { service, sqlite } = setup();
-
-    // The DB's `>= 0` check allows a fractional price, but `amountSchema`
-    // requires whole minor units — so the write lands and the shaped cart is
-    // what the domain schema rejects.
-    sqlite.exec(
-      `UPDATE product_prices SET weekly_price = 1.5 WHERE product_id = 'prd_smartdesk' AND location_id = 'loc_bali'`,
-    );
-
-    await expect(
-      service.addItem({ locationId: "loc_bali", productId: "prd_smartdesk", quantity: 1 }),
-    ).resolves.toEqual({
-      success: false,
-      error: { code: "cart_data_invalid", message: expect.stringContaining("has invalid data") },
-    });
-  });
-});
-
-describe("updateItemQuantity", () => {
-  it("sets an exact quantity and re-totals", async () => {
+  it("rejects a summary that does not add up", async () => {
     const { service } = setup();
 
-    const added = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
-
-    const result = await service.updateItemQuantity({
-      cartId: added.data.id,
-      productId: "prd_smartdesk",
-      quantity: 2,
-    });
-    if (!result.success) throw new Error(result.error.message);
-
-    expect(result.data.items[0]?.quantity).toBe(2);
-    expect(result.data.summary).toEqual({
-      currency: "USD",
-      weeklySubtotal: 24000,
-      deposit: 48000,
-      deliveryFee: 5000,
-      discount: 0,
-      totalDueToday: 77000,
-      recurringWeekly: 24000,
-    });
-  });
-
-  it("fails when the line is not in the cart", async () => {
-    const { service } = setup();
-
-    const added = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
-
     await expect(
-      service.updateItemQuantity({
-        cartId: added.data.id,
-        productId: "prd_chair",
-        quantity: 2,
-      }),
+      service.createCart(smartdeskCart({ summary: { totalDueToday: 41001 } })),
     ).resolves.toEqual({
       success: false,
       error: {
-        code: "cart_item_not_found",
-        message: `Product prd_chair is not in cart ${added.data.id}`,
+        code: "cart_summary_mismatch",
+        message: "Cart cart_1 summary does not match its lines",
       },
     });
   });
 
-  it("fails on a cart that does not exist", async () => {
-    const { service } = setup();
-
-    await expect(
-      service.updateItemQuantity({ cartId: "cart_missing", productId: "prd_chair", quantity: 2 }),
-    ).resolves.toEqual({
-      success: false,
-      error: { code: "cart_not_found", message: "Cart cart_missing not found" },
-    });
-  });
-
-  it("reports a read failure instead of throwing", async () => {
+  it("reports a lookup failure instead of throwing", async () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(
-      service.updateItemQuantity({ cartId: "cart_any", productId: "prd_chair", quantity: 1 }),
-    ).resolves.toEqual({
+    await expect(service.createCart(smartdeskCart())).resolves.toEqual({
       success: false,
-      error: { code: "failed_to_fetch_cart", message: "Failed to fetch cart" },
+      error: { code: "failed_to_validate_cart", message: "Failed to validate cart" },
     });
   });
 });
 
-describe("removeItem", () => {
-  it("removes a line and re-totals", async () => {
-    const { service } = setup();
+describe("updateCart", () => {
+  it("replaces the stored lines and summary", async () => {
+    const database = setup();
+    const { service } = database;
 
-    const first = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!first.success) throw new Error(first.error.message);
-    const second = await service.addItem({
-      cartId: first.data.id,
-      locationId: "loc_bali",
-      productId: "prd_chair",
-      quantity: 1,
-    });
-    if (!second.success) throw new Error(second.error.message);
+    const created = await service.createCart(
+      cartFixture({
+        id: "cart_1",
+        customerId: "user_01",
+        items: [
+          { productId: "prd_smartdesk", weeklyPrice: 12000, deposit: 24000 },
+          { productId: "prd_chair", weeklyPrice: 6000, deposit: 12000 },
+        ],
+        deliveryFee: 5000,
+      }),
+    );
+    if (!created.success) throw new Error(created.error.message);
 
-    const result = await service.removeItem({
-      cartId: second.data.id,
-      productId: "prd_chair",
+    const updated = cartFixture({
+      id: "cart_1",
+      customerId: "user_01",
+      items: [{ productId: "prd_lamp", weeklyPrice: 4000 }],
+      deliveryFee: 1000,
     });
+
+    const result = await service.updateCart(updated);
     if (!result.success) throw new Error(result.error.message);
 
-    expect(result.data.items.map((item) => item.productId)).toEqual(["prd_smartdesk"]);
-    expect(result.data.summary).toEqual({
-      currency: "USD",
-      weeklySubtotal: 12000,
-      deposit: 24000,
-      deliveryFee: 5000,
-      discount: 0,
-      totalDueToday: 41000,
-      recurringWeekly: 12000,
+    expect(result.data).toEqual(updated);
+    expect(storedCartRow(database, "cart_1")).toMatchObject({
+      weeklySubtotal: 4000,
+      deposit: 0,
+      deliveryFee: 1000,
+      totalDueToday: 5000,
+      recurringWeekly: 4000,
     });
+    expect(storedCartItems(database, "cart_1")).toEqual([
+      {
+        position: 0,
+        productId: "prd_lamp",
+        name: "prd_lamp",
+        slug: "prd_lamp",
+        imageUrl: "https://cdn.async.rent/prd_lamp-0.jpg",
+        imageAlt: "prd_lamp",
+        quantity: 1,
+        weeklyPrice: 4000,
+        deposit: null,
+      },
+    ]);
   });
 
-  it("leaves an empty cart rather than dropping it", async () => {
-    const { service } = setup();
+  it("can empty a cart without dropping the row", async () => {
+    const database = setup();
+    const { service } = database;
 
-    const added = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
+    const created = await service.createCart(smartdeskCart({ id: "cart_1" }));
+    if (!created.success) throw new Error(created.error.message);
 
-    const removed = await service.removeItem({
-      cartId: added.data.id,
-      productId: "prd_lamp",
-    });
-    if (!removed.success) throw new Error(removed.error.message);
+    const emptied = cartFixture({ id: "cart_1" });
+    const result = await service.updateCart(emptied);
+    if (!result.success) throw new Error(result.error.message);
 
-    expect(removed.data.id).toBe(added.data.id);
-    expect(removed.data.items).toEqual([]);
-    expect(removed.data.summary).toEqual({
-      currency: "USD",
+    expect(result.data).toEqual(emptied);
+    expect(storedCartItems(database, "cart_1")).toEqual([]);
+    expect(storedCartRow(database, "cart_1")).toMatchObject({
       weeklySubtotal: 0,
       deposit: 0,
       deliveryFee: 0,
-      discount: 0,
       totalDueToday: 0,
-      recurringWeekly: 0,
-    });
-
-    // The empty cart is still readable under the same id.
-    const read = await service.getCart(added.data.id);
-    if (!read.success) throw new Error(read.error.message);
-    expect(read.data.items).toEqual([]);
-  });
-
-  it("fails when the line is not in the cart", async () => {
-    const { service } = setup();
-
-    const added = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
-
-    await expect(
-      service.removeItem({ cartId: added.data.id, productId: "prd_chair" }),
-    ).resolves.toEqual({
-      success: false,
-      error: {
-        code: "cart_item_not_found",
-        message: `Product prd_chair is not in cart ${added.data.id}`,
-      },
     });
   });
 
-  it("reports a read failure instead of throwing", async () => {
-    const { service, sqlite } = setup();
-    sqlite.close();
+  it("keeps the cart's created time and bumps its updated time", async () => {
+    const database = setup();
+    const { service, sqlite } = database;
 
-    await expect(
-      service.removeItem({ cartId: "cart_any", productId: "prd_chair" }),
-    ).resolves.toEqual({
-      success: false,
-      error: { code: "failed_to_fetch_cart", message: "Failed to fetch cart" },
-    });
-  });
-});
+    const created = await service.createCart(smartdeskCart({ id: "cart_1" }));
+    if (!created.success) throw new Error(created.error.message);
 
-describe("getCart", () => {
-  it("returns the persisted cart and its stored summary", async () => {
-    const { service } = setup();
+    // A fixed old stamp, so the update has something to preserve.
+    sqlite.exec(`UPDATE carts SET created_at = 1000, updated_at = NULL WHERE id = 'cart_1'`);
 
-    const added = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
-
-    const result = await service.getCart(added.data.id);
+    const result = await service.updateCart(smartdeskCart({ id: "cart_1", deliveryFee: 5000 }));
     if (!result.success) throw new Error(result.error.message);
 
-    expect(result.data).toMatchObject({
-      id: added.data.id,
-      locationId: "loc_bali",
-      summary: { weeklySubtotal: 12000, totalDueToday: 41000 },
-    });
+    const row = storedCartRow(database, "cart_1");
+    expect(row?.createdAt).toBe(1000);
+    expect(row?.updatedAt).toBeGreaterThan(1000);
   });
 
   it("fails when the cart does not exist", async () => {
     const { service } = setup();
 
-    await expect(service.getCart("cart_missing")).resolves.toEqual({
+    await expect(service.updateCart(smartdeskCart({ id: "cart_missing" }))).resolves.toEqual({
       success: false,
       error: { code: "cart_not_found", message: "Cart cart_missing not found" },
     });
   });
 
-  it("reports a read failure instead of throwing", async () => {
-    const { service, sqlite } = setup();
-    sqlite.close();
-
-    await expect(service.getCart("cart_any")).resolves.toEqual({
-      success: false,
-      error: { code: "failed_to_fetch_cart", message: "Failed to fetch cart" },
-    });
-  });
-
-  it("returns an invalid-data failure instead of throwing on a broken row", async () => {
-    const { service, sqlite } = setup();
-
-    const added = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
-
-    // A row the DB accepts but the domain schema rejects: a fractional amount
-    // still satisfies `>= 0`, yet `amountSchema` requires whole minor units.
-    sqlite.exec(`UPDATE cart_items SET weekly_price = 1.5 WHERE cart_id = '${added.data.id}'`);
-
-    await expect(service.getCart(added.data.id)).resolves.toEqual({
-      success: false,
-      error: { code: "cart_data_invalid", message: `Cart ${added.data.id} has invalid data` },
-    });
-  });
-
-  it("keeps one total when a city's delivery fee changes", async () => {
-    const { service, sqlite } = setup();
-
-    const added = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
-    });
-    if (!added.success) throw new Error(added.error.message);
-    expect(added.data.summary).toMatchObject({ deliveryFee: 5000, totalDueToday: 41000 });
-
-    // The delivery fee is not snapshotted on a line, so a read must recompute
-    // it: the stored row and a later write must never quote two different totals.
-    sqlite.exec(
-      `UPDATE product_prices SET delivery_fee = 9000 WHERE product_id = 'prd_smartdesk' AND location_id = 'loc_bali'`,
-    );
-
-    const read = await service.getCart(added.data.id);
-    if (!read.success) throw new Error(read.error.message);
-    expect(read.data.summary).toMatchObject({ deliveryFee: 9000, totalDueToday: 45000 });
-
-    const merged = await service.addItem({
-      cartId: added.data.id,
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    if (!merged.success) throw new Error(merged.error.message);
-
-    // 12000 + 4000 weekly, 24000 deposit, max(9000, 1000) delivery.
-    expect(merged.data.summary).toEqual({
-      currency: "USD",
-      weeklySubtotal: 16000,
-      deposit: 24000,
-      deliveryFee: 9000,
-      discount: 0,
-      totalDueToday: 49000,
-      recurringWeekly: 16000,
-    });
-  });
-});
-
-describe("cart ownership and concurrent adds", () => {
-  it("claims an unowned cart for a signed-in visitor", async () => {
+  it("revalidates the city when the cart moves", async () => {
     const { service } = setup();
 
-    const guest = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    if (!guest.success) throw new Error(guest.error.message);
-    expect(guest.data.customerId).toBeUndefined();
+    const created = await service.createCart(smartdeskCart({ id: "cart_1" }));
+    if (!created.success) throw new Error(created.error.message);
 
-    const claimed = await service.addItem({
-      cartId: guest.data.id,
-      customerId: "user_01",
-      locationId: "loc_bali",
-      productId: "prd_chair",
-      quantity: 1,
-    });
-    if (!claimed.success) throw new Error(claimed.error.message);
-    expect(claimed.data.customerId).toBe("user_01");
-
-    // A later add without a cart id finds the now-owned cart, not a second one.
-    const again = await service.addItem({
-      customerId: "user_01",
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    if (!again.success) throw new Error(again.error.message);
-    expect(again.data.id).toBe(guest.data.id);
-  });
-
-  it("refuses a cart owned by another customer", async () => {
-    const { service } = setup();
-
-    const owned = await service.addItem({
-      customerId: "user_01",
-      locationId: "loc_bali",
-      productId: "prd_lamp",
-      quantity: 1,
-    });
-    if (!owned.success) throw new Error(owned.error.message);
-
+    // The lamp is sold in Bali only, so a Lisbon cart cannot hold it.
     await expect(
-      service.addItem({
-        cartId: owned.data.id,
-        customerId: "user_02",
-        locationId: "loc_bali",
-        productId: "prd_chair",
-        quantity: 1,
-      }),
+      service.updateCart(
+        cartFixture({
+          id: "cart_1",
+          locationId: "loc_lisbon",
+          items: [{ productId: "prd_lamp", weeklyPrice: 4000 }],
+        }),
+      ),
     ).resolves.toEqual({
       success: false,
       error: {
-        code: "cart_forbidden",
-        message: `Cart ${owned.data.id} belongs to another customer`,
+        code: "product_not_available",
+        message: "Product prd_lamp is not available in loc_lisbon",
       },
     });
   });
 
-  it("lands both of two overlapping adds of the same product", async () => {
+  it("rejects a summary that does not match", async () => {
     const { service } = setup();
 
-    const cart = await service.addItem({
-      locationId: "loc_bali",
-      productId: "prd_smartdesk",
-      quantity: 1,
+    const created = await service.createCart(smartdeskCart({ id: "cart_1" }));
+    if (!created.success) throw new Error(created.error.message);
+
+    await expect(
+      service.updateCart(smartdeskCart({ id: "cart_1", summary: { deliveryFee: 0 } })),
+    ).resolves.toEqual({
+      success: false,
+      error: {
+        code: "cart_summary_mismatch",
+        message: "Cart cart_1 summary does not match its lines",
+      },
     });
-    if (!cart.success) throw new Error(cart.error.message);
+  });
 
-    // Both calls read the cart before either writes, so both try to open the
-    // same line; the loser retries and merges.
-    const results = await Promise.all([
-      service.addItem({
-        cartId: cart.data.id,
-        locationId: "loc_bali",
-        productId: "prd_lamp",
-        quantity: 1,
-      }),
-      service.addItem({
-        cartId: cart.data.id,
-        locationId: "loc_bali",
-        productId: "prd_lamp",
-        quantity: 1,
-      }),
-    ]);
+  it("reports a lookup failure instead of throwing", async () => {
+    const { service, sqlite } = setup();
+    sqlite.close();
 
-    expect(results.every((result) => result.success)).toBe(true);
-
-    const read = await service.getCart(cart.data.id);
-    if (!read.success) throw new Error(read.error.message);
-    expect(read.data.items.find((item) => item.productId === "prd_lamp")?.quantity).toBe(2);
+    await expect(service.updateCart(smartdeskCart({ id: "cart_1" }))).resolves.toEqual({
+      success: false,
+      error: { code: "failed_to_validate_cart", message: "Failed to validate cart" },
+    });
   });
 });
