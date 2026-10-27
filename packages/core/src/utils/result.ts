@@ -82,17 +82,27 @@ export type Result<TData, TErrorCode extends string> =
   | (TData extends void ? SuccessResult : SuccessWithDataResult<TData>)
   | FailedResult<TErrorCode>;
 
-export function successResult<TSchema extends z.ZodType>(schema: TSchema) {
+/**
+ * The success branch: an operation with `void` data succeeds without a
+ * payload, anything else succeeds with a parsed payload.
+ */
+export type SuccessResultFactory<TData> = TData extends void
+  ? () => SuccessResult
+  : (data: TData) => SuccessWithDataResult<TData>;
+
+export function successResult<TSchema extends z.ZodType>(
+  schema: TSchema,
+): SuccessResultFactory<z.infer<TSchema>> {
   const success = true;
 
-  if (schema.type === "void") return (): SuccessResult => ({ success });
+  if (schema.type === "void") {
+    return (() => ({ success })) as unknown as SuccessResultFactory<z.infer<TSchema>>;
+  }
 
-  return (data: z.infer<TSchema>): SuccessWithDataResult<z.infer<TSchema>> => {
-    return {
-      success,
-      data: schema.parse(data),
-    };
-  };
+  return ((data: z.infer<TSchema>) => ({
+    success,
+    data: schema.parse(data),
+  })) as unknown as SuccessResultFactory<z.infer<TSchema>>;
 }
 
 export function failedResult<TErrorCodeSchema extends z.ZodType<string>>(
@@ -107,13 +117,26 @@ export function failedResult<TErrorCodeSchema extends z.ZodType<string>>(
   });
 }
 
+export interface ResultFactory<TData, TErrorCode extends string> {
+  schema: z.ZodType<Result<TData, TErrorCode>>;
+  success: SuccessResultFactory<TData>;
+  failed: (code: TErrorCode, message: string) => FailedResult<TErrorCode>;
+}
+
 export function createResult<TSchema extends z.ZodType, TErrorCodeSchema extends z.ZodType<string>>(
   dataSchema: TSchema,
   errCodeSchema: TErrorCodeSchema,
-) {
+): ResultFactory<z.infer<TSchema>, z.infer<TErrorCodeSchema>> {
   const schema = createResultSchema(dataSchema, errCodeSchema);
   const success = successResult(dataSchema);
   const failed = failedResult(errCodeSchema);
 
-  return { schema, success, failed };
+  return {
+    schema: schema as unknown as ResultFactory<
+      z.infer<TSchema>,
+      z.infer<TErrorCodeSchema>
+    >["schema"],
+    success,
+    failed,
+  };
 }
