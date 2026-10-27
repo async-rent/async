@@ -155,11 +155,7 @@ export const productQuerySchema = z.object({
     ),
 });
 
-/**
- * What a caller may pass: the filters are optional because the service parses
- * the query itself and fills the schema's defaults.
- */
-export type ProductQuery = z.input<typeof productQuerySchema>;
+export type ProductQuery = z.infer<typeof productQuerySchema>;
 
 export const productPageSchema = paginationSchema(productSchema);
 

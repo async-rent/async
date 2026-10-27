@@ -1,12 +1,3 @@
-import {
-  categories,
-  locations,
-  productHighlights,
-  productImages,
-  productPrices,
-  productSpecs,
-  products,
-} from "@async-rent/db";
 import type {
   CategoryRow,
   LocationRow,
@@ -16,8 +7,17 @@ import type {
   ProductRow,
   ProductSpecRow,
 } from "@async-rent/db";
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import {
+  categories,
+  locations,
+  productHighlights,
+  productImages,
+  productPrices,
+  productSpecs,
+  products,
+} from "@async-rent/db";
 import type { SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
@@ -26,7 +26,6 @@ import {
   categorySchema,
   locationSchema,
   productPageSchema,
-  productQuerySchema,
   productSchema,
   type ProductQuery,
 } from "../types";
@@ -206,7 +205,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
   const searchProductsResult = createResult(
     productPageSchema,
-    z.enum(["invalid_product_query", "failed_to_search_products"]),
+    z.enum(["failed_to_search_products"]),
   );
 
   const getProductResult = createResult(
@@ -316,17 +315,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     query: ProductQuery,
   ): Promise<z.infer<(typeof searchProductsResult)["schema"]>> {
     const { success, failed } = searchProductsResult;
-
-    /**
-     * The bounds this implementation relies on — a page size under D1's
-     * bound-parameter limit, a non-negative `LIMIT`/`OFFSET`, a `q` within
-     * the word cap — live in `productQuerySchema` and are enforced here, on
-     * the path that builds the query, so no caller can bypass them.
-     */
-    const parsed = productQuerySchema.safeParse(query);
-    if (!parsed.success) return failed("invalid_product_query", "Invalid product query");
-
-    const { q, categoryId, locationId, sort, page, pageSize } = parsed.data;
+    const { q, categoryId, locationId, sort, page, pageSize } = query;
 
     const conditions: SQL[] = [eq(products.status, "active"), pricedSomewhere];
 
@@ -367,8 +356,6 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     return success({
       items,
       total,
-      // Counted from the matched rows, not from `items`: an invalid row drops
-      // out of the page above, and the list must keep going past it.
       hasMore: page * pageSize < total,
     });
   }

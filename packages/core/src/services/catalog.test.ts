@@ -270,10 +270,7 @@ function setup() {
   return { ...database, service: createCatalogService({ db: database.db }) };
 }
 
-/**
- * The service parses the query itself, so it fills the schema's defaults;
- * this helper spells them out to keep each case's page shape explicit.
- */
+/** Spells out a fully parsed query so each case's page shape stays explicit. */
 function makeQuery(overrides: Partial<ProductQuery> = {}): ProductQuery {
   return {
     sort: "featured",
@@ -488,45 +485,6 @@ describe("searchProducts", () => {
     expect(second.data.total).toBe(4);
     expect(second.data.hasMore).toBe(false);
     expect(second.data.items.map((product) => product.id)).toEqual(["prd_oak", "prd_smartdesk"]);
-  });
-
-  it("fills the schema's defaults when the caller passes only filters", async () => {
-    const { service } = setup();
-
-    const result = await service.searchProducts({ q: "desk" });
-    if (!result.success) throw new Error(result.error.message);
-
-    // Default page size and the featured-first default sort. "desk" matches
-    // the SmartDesk name, the Oak name and the lamp's description.
-    expect(result.data.total).toBe(3);
-    expect(result.data.items.map((product) => product.id)).toEqual([
-      "prd_smartdesk",
-      "prd_lamp",
-      "prd_oak",
-    ]);
-  });
-
-  it("rejects a query outside the schema's bounds", async () => {
-    const { service } = setup();
-
-    const notFound = {
-      success: false,
-      error: { code: "invalid_product_query", message: "Invalid product query" },
-    } as const;
-
-    // A negative page size would read as no limit in SQLite and dump the
-    // whole catalog into one page.
-    await expect(service.searchProducts(makeQuery({ pageSize: -1 }))).resolves.toEqual(notFound);
-    await expect(service.searchProducts(makeQuery({ pageSize: 0 }))).resolves.toEqual(notFound);
-    // Past 48 products a page would blow the D1 bound-parameter limit.
-    await expect(service.searchProducts(makeQuery({ pageSize: 49 }))).resolves.toEqual(notFound);
-    await expect(service.searchProducts(makeQuery({ page: 0 }))).resolves.toEqual(notFound);
-    const badSort = { ...makeQuery(), sort: "cheapest" } as unknown as ProductQuery;
-    await expect(service.searchProducts(badSort)).resolves.toEqual(notFound);
-    // Over the word cap: the service honours every word or rejects the query.
-    await expect(
-      service.searchProducts(makeQuery({ q: "one two three four five six seven eight nine" })),
-    ).resolves.toEqual(notFound);
   });
 
   it("keeps the page up when one product's data is malformed", async () => {
