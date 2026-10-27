@@ -3,6 +3,7 @@ import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { makeProduct } from "../../tests/factories";
 import { createTestDatabase, type TestDatabase } from "../../tests/database";
+import type { ProductQuery } from "../types";
 import { createCatalogService } from "./catalog";
 
 interface DbMockOptions {
@@ -262,17 +263,27 @@ function setup() {
   return { ...database, service: createCatalogService({ db: database.db }) };
 }
 
+/**
+ * A complete query: applying the schema's defaults is the caller's job, not
+ * the service's (the storefront parses the edge input before calling core).
+ */
+function makeQuery(overrides: Partial<ProductQuery> = {}): ProductQuery {
+  return {
+    sort: "featured",
+    page: 1,
+    pageSize: 12,
+    ...overrides,
+  };
+}
+
 describe("searchProducts", () => {
-  it("returns active products with their nested details and page metadata", async () => {
+  it("returns active products with their nested details and total", async () => {
     const { service } = setup();
 
-    const result = await service.searchProducts({ sort: "name_asc" });
+    const result = await service.searchProducts(makeQuery({ sort: "name_asc" }));
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data.total).toBe(4);
-    expect(result.data.page).toBe(1);
-    expect(result.data.pageSize).toBe(12);
-    expect(result.data.hasMore).toBe(false);
     expect(result.data.items.map((product) => product.id)).toEqual([
       "prd_lamp",
       "prd_chair",
@@ -314,7 +325,7 @@ describe("searchProducts", () => {
   it("puts featured products first by default", async () => {
     const { service } = setup();
 
-    const result = await service.searchProducts();
+    const result = await service.searchProducts(makeQuery());
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data.items.map((product) => product.id)).toEqual([
@@ -328,7 +339,7 @@ describe("searchProducts", () => {
   it("filters by category", async () => {
     const { service } = setup();
 
-    const result = await service.searchProducts({ categoryId: "cat_chairs" });
+    const result = await service.searchProducts(makeQuery({ categoryId: "cat_chairs" }));
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data.total).toBe(1);
@@ -338,7 +349,9 @@ describe("searchProducts", () => {
   it("only shows products available in the requested city", async () => {
     const { service } = setup();
 
-    const result = await service.searchProducts({ locationId: "loc_bali", sort: "name_asc" });
+    const result = await service.searchProducts(
+      makeQuery({ locationId: "loc_bali", sort: "name_asc" }),
+    );
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data.total).toBe(3);
@@ -352,15 +365,15 @@ describe("searchProducts", () => {
   it("matches every search word against the name, copy and category", async () => {
     const { service } = setup();
 
-    const mesh = await service.searchProducts({ q: "BREATHABLE mesh" });
+    const mesh = await service.searchProducts(makeQuery({ q: "BREATHABLE mesh" }));
     if (!mesh.success) throw new Error(mesh.error.message);
     expect(mesh.data.items.map((product) => product.id)).toEqual(["prd_chair"]);
 
-    const lighting = await service.searchProducts({ q: "lighting" });
+    const lighting = await service.searchProducts(makeQuery({ q: "lighting" }));
     if (!lighting.success) throw new Error(lighting.error.message);
     expect(lighting.data.items.map((product) => product.id)).toEqual(["prd_lamp"]);
 
-    const nothing = await service.searchProducts({ q: "breathable desk" });
+    const nothing = await service.searchProducts(makeQuery({ q: "breathable desk" }));
     if (!nothing.success) throw new Error(nothing.error.message);
     expect(nothing.data.items).toEqual([]);
     expect(nothing.data.total).toBe(0);
@@ -369,7 +382,7 @@ describe("searchProducts", () => {
   it("treats search words as text, not as wildcards", async () => {
     const { service } = setup();
 
-    const result = await service.searchProducts({ q: "%" });
+    const result = await service.searchProducts(makeQuery({ q: "%" }));
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data.total).toBe(0);
@@ -378,7 +391,9 @@ describe("searchProducts", () => {
   it("sorts by the weekly price in the selected city", async () => {
     const { service } = setup();
 
-    const bali = await service.searchProducts({ locationId: "loc_bali", sort: "price_asc" });
+    const bali = await service.searchProducts(
+      makeQuery({ locationId: "loc_bali", sort: "price_asc" }),
+    );
     if (!bali.success) throw new Error(bali.error.message);
     expect(bali.data.items.map((product) => product.id)).toEqual([
       "prd_lamp",
@@ -386,7 +401,9 @@ describe("searchProducts", () => {
       "prd_smartdesk",
     ]);
 
-    const lisbon = await service.searchProducts({ locationId: "loc_lisbon", sort: "price_asc" });
+    const lisbon = await service.searchProducts(
+      makeQuery({ locationId: "loc_lisbon", sort: "price_asc" }),
+    );
     if (!lisbon.success) throw new Error(lisbon.error.message);
     expect(lisbon.data.items.map((product) => product.id)).toEqual([
       "prd_chair",
@@ -394,10 +411,9 @@ describe("searchProducts", () => {
       "prd_oak",
     ]);
 
-    const expensive = await service.searchProducts({
-      locationId: "loc_lisbon",
-      sort: "price_desc",
-    });
+    const expensive = await service.searchProducts(
+      makeQuery({ locationId: "loc_lisbon", sort: "price_desc" }),
+    );
     if (!expensive.success) throw new Error(expensive.error.message);
     expect(expensive.data.items.map((product) => product.id)).toEqual([
       "prd_oak",
@@ -405,7 +421,7 @@ describe("searchProducts", () => {
       "prd_chair",
     ]);
 
-    const anywhere = await service.searchProducts({ sort: "price_asc" });
+    const anywhere = await service.searchProducts(makeQuery({ sort: "price_asc" }));
     if (!anywhere.success) throw new Error(anywhere.error.message);
     expect(anywhere.data.items.map((product) => product.id)).toEqual([
       "prd_lamp",
@@ -418,7 +434,7 @@ describe("searchProducts", () => {
   it("sorts newest first", async () => {
     const { service } = setup();
 
-    const result = await service.searchProducts({ sort: "newest" });
+    const result = await service.searchProducts(makeQuery({ sort: "newest" }));
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data.items.map((product) => product.id)).toEqual([
@@ -429,34 +445,29 @@ describe("searchProducts", () => {
     ]);
   });
 
-  it("returns page-sized chunks with a total and a has-more flag", async () => {
+  it("returns page-sized chunks so the total covers every page", async () => {
     const { service } = setup();
 
-    const first = await service.searchProducts({ sort: "name_asc", page: 1, pageSize: 2 });
+    const first = await service.searchProducts(
+      makeQuery({ sort: "name_asc", page: 1, pageSize: 2 }),
+    );
     if (!first.success) throw new Error(first.error.message);
-    expect(first.data).toMatchObject({ total: 4, page: 1, pageSize: 2, hasMore: true });
+    expect(first.data).toEqual({ total: 4, items: expect.any(Array) });
     expect(first.data.items.map((product) => product.id)).toEqual(["prd_lamp", "prd_chair"]);
 
-    const second = await service.searchProducts({ sort: "name_asc", page: 2, pageSize: 2 });
+    const second = await service.searchProducts(
+      makeQuery({ sort: "name_asc", page: 2, pageSize: 2 }),
+    );
     if (!second.success) throw new Error(second.error.message);
-    expect(second.data).toMatchObject({ total: 4, page: 2, pageSize: 2, hasMore: false });
+    expect(second.data.total).toBe(4);
     expect(second.data.items.map((product) => product.id)).toEqual(["prd_oak", "prd_smartdesk"]);
-  });
-
-  it("rejects a query outside the schema's bounds", async () => {
-    const { service } = setup();
-
-    await expect(service.searchProducts({ pageSize: 100 })).resolves.toEqual({
-      success: false,
-      error: { code: "invalid_product_query", message: "Invalid product query" },
-    });
   });
 
   it("reports a read failure instead of throwing", async () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.searchProducts()).resolves.toEqual({
+    await expect(service.searchProducts(makeQuery())).resolves.toEqual({
       success: false,
       error: { code: "failed_to_search_products", message: "Failed to search products" },
     });

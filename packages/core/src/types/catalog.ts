@@ -129,7 +129,7 @@ export const productQuerySchema = z.object({
   pageSize: z.number().int().positive().max(48).default(12),
 });
 
-export type ProductQuery = z.input<typeof productQuerySchema>;
+export type ProductQuery = z.infer<typeof productQuerySchema>;
 
 export const productPageSchema = paginationSchema(productSchema);
 

@@ -21,17 +21,15 @@ import type { SQL } from "drizzle-orm";
 import { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
-import type { Category, Location, Product, ProductPage, ProductSort } from "../types";
+import type { Category, Location, Product, ProductSort } from "../types";
 import {
   categorySchema,
   locationSchema,
   productPageSchema,
-  productQuerySchema,
   productSchema,
   type ProductQuery,
 } from "../types";
 import { createResult } from "../utils";
-import type { Result } from "../utils";
 
 export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
@@ -200,7 +198,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
   const searchProductsResult = createResult(
     productPageSchema,
-    z.enum(["invalid_product_query", "failed_to_search_products"]),
+    z.enum(["failed_to_search_products"]),
   );
 
   const getProductResult = createResult(
@@ -300,14 +298,11 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   }
 
   async function searchProducts(
-    query: ProductQuery = {},
-  ): Promise<Result<ProductPage, "invalid_product_query" | "failed_to_search_products">> {
+    query: ProductQuery,
+  ): Promise<z.infer<(typeof searchProductsResult)["schema"]>> {
     const { success, failed } = searchProductsResult;
 
-    const parsed = productQuerySchema.safeParse(query);
-    if (!parsed.success) return failed("invalid_product_query", "Invalid product query");
-
-    const { q, categoryId, locationId, sort, page, pageSize } = parsed.data;
+    const { q, categoryId, locationId, sort, page, pageSize } = query;
 
     const conditions: SQL[] = [eq(products.status, "active"), pricedSomewhere];
 
@@ -327,8 +322,8 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     const where = and(...conditions);
     const orderBy = orderFor(sort, locationId);
 
-    try {
-      const [countRows, rows] = await db.batch([
+    const batch = await db
+      .batch([
         db.select({ total: count() }).from(products).where(where),
         db
           .select()
@@ -337,68 +332,70 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
           .orderBy(...orderBy)
           .limit(pageSize)
           .offset((page - 1) * pageSize),
-      ]);
+      ])
+      .catch(() => null);
+    if (!batch) return failed("failed_to_search_products", "Failed to search products");
 
-      const total = countRows[0]?.total ?? 0;
-      const items = await loadProducts(rows);
+    const [countRows, rows] = batch;
+    const total = countRows[0]?.total ?? 0;
 
-      return success({
-        items,
-        total,
-        page,
-        pageSize,
-        hasMore: page * pageSize < total,
-      });
-    } catch {
-      return failed("failed_to_search_products", "Failed to search products");
-    }
+    const items = await loadProducts(rows).catch(() => null);
+    if (!items) return failed("failed_to_search_products", "Failed to search products");
+
+    return success({
+      items,
+      total,
+    });
   }
 
   async function getProduct(
     productId: string,
-  ): Promise<Result<Product, "product_not_found" | "failed_to_fetch_product">> {
+  ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
     const { success, failed } = getProductResult;
 
-    try {
-      const [row] = await db.select().from(products).where(eq(products.id, productId)).limit(1);
-      if (!row) return failed("product_not_found", `Product ${productId} not found`);
+    const productRows = await db
+      .select()
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1)
+      .catch(() => null);
+    if (!productRows) return failed("failed_to_fetch_product", "Failed to fetch product");
 
-      const [product] = await loadProducts([row]);
+    const [row] = productRows;
+    if (!row) return failed("product_not_found", `Product ${productId} not found`);
 
-      return success(product);
-    } catch {
-      return failed("failed_to_fetch_product", "Failed to fetch product");
-    }
+    const loadedProducts = await loadProducts([row]).catch(() => null);
+    if (!loadedProducts) return failed("failed_to_fetch_product", "Failed to fetch product");
+
+    const [product] = loadedProducts;
+
+    return success(product);
   }
 
-  async function listLocations(): Promise<Result<Location[], "failed_to_list_locations">> {
+  async function listLocations(): Promise<z.infer<(typeof listLocationsResult)["schema"]>> {
     const { success, failed } = listLocationsResult;
 
-    try {
-      const rows = await db
-        .select()
-        .from(locations)
-        .orderBy(asc(locations.name), asc(locations.id));
+    const rows = await db
+      .select()
+      .from(locations)
+      .orderBy(asc(locations.name), asc(locations.id))
+      .catch(() => null);
+    if (!rows) return failed("failed_to_list_locations", "Failed to list locations");
 
-      return success(rows.map(toLocation));
-    } catch {
-      return failed("failed_to_list_locations", "Failed to list locations");
-    }
+    return success(rows.map(toLocation));
   }
 
-  async function listCategories(): Promise<Result<Category[], "failed_to_list_categories">> {
+  async function listCategories(): Promise<z.infer<(typeof listCategoriesResult)["schema"]>> {
     const { success, failed } = listCategoriesResult;
 
-    try {
-      const rows = await db
-        .select()
-        .from(categories)
-        .orderBy(asc(categories.sortOrder), asc(categories.name), asc(categories.id));
+    const rows = await db
+      .select()
+      .from(categories)
+      .orderBy(asc(categories.sortOrder), asc(categories.name), asc(categories.id))
+      .catch(() => null);
+    if (!rows) return failed("failed_to_list_categories", "Failed to list categories");
 
-      return success(rows.map(toCategory));
-    } catch {
-      return failed("failed_to_list_categories", "Failed to list categories");
-    }
+    return success(rows.map(toCategory));
   }
 
   return {
