@@ -114,8 +114,26 @@ export const productSortSchema = z.enum([
 
 export type ProductSort = z.infer<typeof productSortSchema>;
 
+/**
+ * Words a free-text search may carry. The service folds and counts tokens the
+ * same way, so this is the bound a caller's parse enforces before `q` reaches
+ * the query.
+ */
+export const maxSearchTokens = 8;
+
 export const productQuerySchema = z.object({
-  q: z.string().optional().describe('Free-text search, e.g. "desk".'),
+  q: z
+    .string()
+    .max(120)
+    .refine(
+      (q) =>
+        q
+          .trim()
+          .split(/\s+/)
+          .filter((token) => token.length > 0).length <= maxSearchTokens,
+    )
+    .optional()
+    .describe('Free-text search, e.g. "desk".'),
   categoryId: z
     .string()
     .optional()
@@ -126,7 +144,16 @@ export const productQuerySchema = z.object({
     .describe("Stable location id to filter by; the edge resolves a slug to it."),
   sort: productSortSchema.default("featured"),
   page: z.number().int().positive().default(1),
-  pageSize: z.number().int().positive().max(48).default(12),
+  pageSize: z
+    .number()
+    .int()
+    .positive()
+    .max(48)
+    .default(12)
+    .describe(
+      "Products per page. The cap also keeps each batched child-table select — one bound " +
+        "parameter per product id — well under D1's 100 bound-parameter statement limit.",
+    ),
 });
 
 export type ProductQuery = z.infer<typeof productQuerySchema>;

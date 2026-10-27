@@ -388,6 +388,25 @@ describe("searchProducts", () => {
     expect(result.data.total).toBe(0);
   });
 
+  it("folds search words the way SQLite folds them: ASCII case-insensitive, other scripts case-exact", async () => {
+    const context = setup();
+    insertProduct(context, {
+      id: "prd_cafe",
+      name: "CAFÉ Lounge Chair",
+      categoryId: "cat_chairs",
+      prices: [{ locationId: "loc_bali", weeklyPrice: 20000 }],
+    });
+    const { service } = context;
+
+    const sameCase = await service.searchProducts(makeQuery({ q: "CAFÉ" }));
+    if (!sameCase.success) throw new Error(sameCase.error.message);
+    expect(sameCase.data.items.map((product) => product.id)).toEqual(["prd_cafe"]);
+
+    const otherCase = await service.searchProducts(makeQuery({ q: "café" }));
+    if (!otherCase.success) throw new Error(otherCase.error.message);
+    expect(otherCase.data.items).toEqual([]);
+  });
+
   it("sorts by the weekly price in the selected city", async () => {
     const { service } = setup();
 
@@ -463,6 +482,30 @@ describe("searchProducts", () => {
     expect(second.data.items.map((product) => product.id)).toEqual(["prd_oak", "prd_smartdesk"]);
   });
 
+  it("keeps the page up when one product's data is malformed", async () => {
+    const context = setup();
+    insertProduct(context, {
+      id: "prd_imageless",
+      name: "Frameless Cork Board",
+      prices: [{ locationId: "loc_bali", weeklyPrice: 6000 }],
+      images: [],
+    });
+    const { service } = context;
+
+    const result = await service.searchProducts(makeQuery({ sort: "name_asc" }));
+    if (!result.success) throw new Error(result.error.message);
+
+    // SQL counts every matching row, valid or not; only rows that can be
+    // shaped into a product reach the page.
+    expect(result.data.total).toBe(5);
+    expect(result.data.items.map((product) => product.id)).toEqual([
+      "prd_lamp",
+      "prd_chair",
+      "prd_oak",
+      "prd_smartdesk",
+    ]);
+  });
+
   it("reports a read failure instead of throwing", async () => {
     const { service, sqlite } = setup();
     sqlite.close();
@@ -474,11 +517,11 @@ describe("searchProducts", () => {
   });
 });
 
-describe("getProduct", () => {
+describe("getProductById", () => {
   it("returns one product with its full details", async () => {
     const { service } = setup();
 
-    const result = await service.getProduct("prd_smartdesk");
+    const result = await service.getProductById("prd_smartdesk");
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data).toMatchObject({
@@ -498,9 +541,37 @@ describe("getProduct", () => {
   it("fails when the product does not exist", async () => {
     const { service } = setup();
 
-    await expect(service.getProduct("prd_missing")).resolves.toEqual({
+    await expect(service.getProductById("prd_missing")).resolves.toEqual({
       success: false,
       error: { code: "product_not_found", message: "Product prd_missing not found" },
+    });
+  });
+
+  it("does not serve archived products that search hides", async () => {
+    const { service } = setup();
+
+    await expect(service.getProductById("prd_archived")).resolves.toEqual({
+      success: false,
+      error: { code: "product_not_found", message: "Product prd_archived not found" },
+    });
+  });
+
+  it("reports bad product data instead of a read failure", async () => {
+    const context = setup();
+    insertProduct(context, {
+      id: "prd_imageless",
+      name: "Frameless Cork Board",
+      prices: [{ locationId: "loc_bali", weeklyPrice: 6000 }],
+      images: [],
+    });
+    const { service } = context;
+
+    await expect(service.getProductById("prd_imageless")).resolves.toEqual({
+      success: false,
+      error: {
+        code: "product_data_invalid",
+        message: "Product prd_imageless has invalid data",
+      },
     });
   });
 
@@ -508,9 +579,43 @@ describe("getProduct", () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.getProduct("prd_smartdesk")).resolves.toEqual({
+    await expect(service.getProductById("prd_smartdesk")).resolves.toEqual({
       success: false,
       error: { code: "failed_to_fetch_product", message: "Failed to fetch product" },
+    });
+  });
+});
+
+describe("getProductBySlug", () => {
+  it("resolves a route slug to the full product", async () => {
+    const { service } = setup();
+
+    const result = await service.getProductBySlug("prd_smartdesk");
+    if (!result.success) throw new Error(result.error.message);
+
+    expect(result.data).toMatchObject({
+      id: "prd_smartdesk",
+      slug: "prd_smartdesk",
+      name: "SmartDesk Pro",
+      category: { id: "cat_desks", slug: "desks", name: "Desks" },
+    });
+  });
+
+  it("fails when the product does not exist", async () => {
+    const { service } = setup();
+
+    await expect(service.getProductBySlug("smartdesk-pro")).resolves.toEqual({
+      success: false,
+      error: { code: "product_not_found", message: "Product smartdesk-pro not found" },
+    });
+  });
+
+  it("does not serve archived products either, so a deep link to one is dead", async () => {
+    const { service } = setup();
+
+    await expect(service.getProductBySlug("prd_archived")).resolves.toEqual({
+      success: false,
+      error: { code: "product_not_found", message: "Product prd_archived not found" },
     });
   });
 });

@@ -25,6 +25,7 @@ import type { Category, Location, Product, ProductSort } from "../types";
 import {
   categorySchema,
   locationSchema,
+  maxSearchTokens,
   productPageSchema,
   productSchema,
   type ProductQuery,
@@ -35,8 +36,15 @@ export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
 }
 
-/** Keeps an accidental wall of search words from blowing up the query. */
-const maxSearchTokens = 8;
+/**
+ * The fold SQLite applies on the SQL side of the search: `lower()` folds ASCII
+ * letters only (D1 ships without ICU), so the token is folded the same way.
+ * ASCII searches are case-insensitive; any other character must match the
+ * stored case exactly.
+ */
+function foldToken(token: string): string {
+  return token.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
 
 /**
  * Searches the text a customer can see: the product's own copy and the name of
@@ -203,7 +211,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
   const getProductResult = createResult(
     productSchema,
-    z.enum(["product_not_found", "failed_to_fetch_product"]),
+    z.enum(["product_not_found", "failed_to_fetch_product", "product_data_invalid"]),
   );
 
   const listLocationsResult = createResult(
@@ -246,6 +254,11 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   /**
    * Loads the child rows for a batch of products in one round of queries, so a
    * page of results costs a fixed number of statements instead of one per card.
+   * Each child-table statement binds one parameter per product id, so
+   * `pageSize`'s cap keeps the batch under D1's statement limits.
+   *
+   * A row that cannot be shaped into a valid domain product is a data defect,
+   * not a read failure: it is dropped instead of failing the whole read.
    */
   async function loadProducts(rows: ProductRow[]): Promise<Product[]> {
     if (rows.length === 0) return [];
@@ -283,17 +296,19 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     const specsByProduct = groupByProductId(specRows);
     const pricesByProduct = groupByProductId(priceRows);
 
-    return rows.map((row) => {
+    return rows.flatMap((row) => {
       const category = categoriesById.get(row.categoryId);
-      if (!category) throw new Error(`Product ${row.id} references a missing category`);
+      if (!category) return [];
 
-      return toProduct(row, {
+      const product = toProduct(row, {
         category,
         images: imagesByProduct.get(row.id) ?? [],
         highlights: highlightsByProduct.get(row.id) ?? [],
         specs: specsByProduct.get(row.id) ?? [],
         prices: pricesByProduct.get(row.id) ?? [],
       });
+
+      return productSchema.safeParse(product).success ? [product] : [];
     });
   }
 
@@ -310,8 +325,9 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     if (locationId) conditions.push(pricedIn(locationId));
 
     if (q) {
-      const tokens = q
-        .toLowerCase()
+      // The schema rejects queries over the word cap at the edge; this slice
+      // keeps a direct call from blowing up the query anyway.
+      const tokens = foldToken(q)
         .split(/\s+/)
         .filter((token) => token.length > 0)
         .slice(0, maxSearchTokens);
@@ -348,26 +364,44 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     });
   }
 
-  async function getProduct(
+  /** Looks up one visible product by id; agents and API callers hold ids. */
+  function getProductById(
     productId: string,
+  ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
+    return loadProduct(eq(products.id, productId), productId);
+  }
+
+  /** Resolves a storefront route key; a product's `slug` is its URL-safe id. */
+  function getProductBySlug(slug: string): Promise<z.infer<(typeof getProductResult)["schema"]>> {
+    return loadProduct(eq(products.slug, slug), slug);
+  }
+
+  /**
+   * One visible product by a key. Archived products stay hidden, like on the
+   * list side, so a deep link to one is not a live catalog entry.
+   */
+  async function loadProduct(
+    condition: SQL,
+    key: string,
   ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
     const { success, failed } = getProductResult;
 
     const productRows = await db
       .select()
       .from(products)
-      .where(eq(products.id, productId))
+      .where(and(condition, eq(products.status, "active")))
       .limit(1)
       .catch(() => null);
     if (!productRows) return failed("failed_to_fetch_product", "Failed to fetch product");
 
     const [row] = productRows;
-    if (!row) return failed("product_not_found", `Product ${productId} not found`);
+    if (!row) return failed("product_not_found", `Product ${key} not found`);
 
     const loadedProducts = await loadProducts([row]).catch(() => null);
     if (!loadedProducts) return failed("failed_to_fetch_product", "Failed to fetch product");
 
     const [product] = loadedProducts;
+    if (!product) return failed("product_data_invalid", `Product ${key} has invalid data`);
 
     return success(product);
   }
@@ -401,7 +435,8 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   return {
     createProduct,
     searchProducts,
-    getProduct,
+    getProductById,
+    getProductBySlug,
     listLocations,
     listCategories,
   };
