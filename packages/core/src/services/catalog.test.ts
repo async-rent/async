@@ -25,17 +25,16 @@ interface ProductFixture {
     locationId: string;
     weeklyPrice: number;
     deposit?: number;
-    deliveryFee?: number;
     stock?: number;
   }[];
 }
 
 function seedCitiesAndCategories({ sqlite }: TestDatabase): void {
   sqlite.exec(`
-    INSERT INTO locations (id, slug, name, country, timezone, description, status) VALUES
-      ('loc_bali',    'bali',    'Bali',    'Indonesia', 'Asia/Makassar', 'Canggu and Ubud desks.', 'active'),
-      ('loc_lisbon',  'lisbon',  'Lisbon',  'Portugal',  'Europe/Lisbon', NULL,                     'active'),
-      ('loc_ko_tao',  'ko-tao',  'Ko Tao',  'Thailand',  'Asia/Bangkok',  'Opening next season.',   'coming_soon');
+    INSERT INTO locations (id, slug, name, country, timezone, description, currency, delivery_fee, status) VALUES
+      ('loc_bali',    'bali',    'Bali',    'Indonesia', 'Asia/Makassar', 'Canggu and Ubud desks.', 'USD', 1000, 'active'),
+      ('loc_lisbon',  'lisbon',  'Lisbon',  'Portugal',  'Europe/Lisbon', NULL,                     'USD', 1500, 'active'),
+      ('loc_ko_tao',  'ko-tao',  'Ko Tao',  'Thailand', 'Asia/Bangkok',  'Opening next season.',   'USD',  500, 'coming_soon');
 
     INSERT INTO categories (id, slug, name, description, sort_order) VALUES
       ('cat_lighting', 'lighting', 'Lighting', 'Lamps and ambience.',          3),
@@ -91,15 +90,14 @@ function insertProduct(database: TestDatabase, fixture: ProductFixture): void {
   for (const price of prices) {
     sqlite
       .prepare(
-        `INSERT INTO product_prices (product_id, location_id, currency, weekly_price, deposit, delivery_fee, stock)
-         VALUES (?, ?, 'USD', ?, ?, ?, ?)`,
+        `INSERT INTO product_prices (product_id, location_id, weekly_price, deposit, stock)
+         VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
         fixture.id,
         price.locationId,
         price.weeklyPrice,
         price.deposit ?? null,
-        price.deliveryFee ?? null,
         price.stock ?? null,
       );
   }
@@ -132,7 +130,7 @@ function seedCatalog(database: TestDatabase): void {
     highlights: ["Memory presets", "Cable tray"],
     specs: [{ label: "Height range", value: "62–128 cm" }],
     prices: [
-      { locationId: "loc_bali", weeklyPrice: 12000, deposit: 24000, deliveryFee: 5000, stock: 3 },
+      { locationId: "loc_bali", weeklyPrice: 12000, deposit: 24000, stock: 3 },
       { locationId: "loc_lisbon", weeklyPrice: 13000 },
     ],
   });
@@ -229,7 +227,6 @@ describe("searchProducts", () => {
           locationId: "loc_bali",
           weeklyPrice: 12000,
           deposit: 24000,
-          deliveryFee: 5000,
           stock: 3,
         },
         { locationId: "loc_lisbon", weeklyPrice: 13000 },

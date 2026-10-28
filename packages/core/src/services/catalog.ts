@@ -127,6 +127,8 @@ function toLocation(row: LocationRow): Location {
     country: row.country,
     timezone: row.timezone,
     description: row.description ?? undefined,
+    currency: row.currency,
+    deliveryFee: row.deliveryFee,
     status: row.status,
   };
 }
@@ -164,10 +166,8 @@ function toProduct(row: ProductRow, parts: ProductParts): Product {
     })),
     prices: parts.prices.map((price) => ({
       locationId: price.locationId,
-      currency: price.currency,
       weeklyPrice: price.weeklyPrice,
       deposit: price.deposit ?? undefined,
-      deliveryFee: price.deliveryFee ?? undefined,
       stock: price.stock ?? undefined,
     })),
     highlights: parts.highlights.map((highlight) => highlight.value),

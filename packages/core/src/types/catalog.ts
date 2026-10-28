@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { amountSchema, imageSchema, paginationSchema, timestampsSchema } from "../utils";
+import {
+  amountSchema,
+  currencyCodeSchema,
+  imageSchema,
+  paginationSchema,
+  timestampsSchema,
+} from "../utils";
 
 /**
  * Catalog: the cities Async operates in and the gear available there.
@@ -19,6 +25,10 @@ export const locationSchema = z.object({
   country: z.string().describe('Country name, e.g. "Indonesia".'),
   timezone: z.string().describe('IANA timezone, e.g. "Asia/Makassar".'),
   description: z.string().optional().describe("One-line description for the city picker."),
+  currency: currencyCodeSchema.describe("Currency every price in this city is quoted in."),
+  deliveryFee: amountSchema.describe(
+    "One-off delivery and setup charge for an order in this city.",
+  ),
   status: locationStatusSchema.default("active"),
 });
 
@@ -39,14 +49,15 @@ export type Category = z.infer<typeof categorySchema>;
  *
  * The presence of a row means the product is offered there. Omitting a city
  * means the product is not available in that location.
+ *
+ * The currency and the delivery fee belong to the city, not to the product:
+ * every price in a city is in that city's currency, and an order pays delivery
+ * once no matter how many products it holds.
  */
 export const productPriceSchema = z.object({
   locationId: z.string().describe("Stable location id this price applies to."),
   weeklyPrice: amountSchema.describe("Weekly rental price in this city."),
   deposit: amountSchema.optional().describe("Refundable deposit in this city."),
-  deliveryFee: amountSchema
-    .optional()
-    .describe("One-off delivery and setup fee for this product in this city."),
   stock: z
     .number()
     .int()

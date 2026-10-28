@@ -1,344 +1,853 @@
-import type { CartItemRow, CartRow } from "@async-rent/db";
-import { cartItems, carts, locations, productPrices, products } from "@async-rent/db";
-import { and, eq, inArray } from "drizzle-orm";
+import type { CartOwnerTypeValue } from "@async-rent/db";
+import {
+  cartItems,
+  carts,
+  locations,
+  productImages,
+  productPrices,
+  products,
+} from "@async-rent/db";
+import type { SQL } from "drizzle-orm";
+import { and, asc, count, eq, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
-import type { Cart, CartItem, ChargeSummary } from "../types";
-import { cartSchema } from "../types";
+import type { Cart, CartItem, CartOwner } from "../types";
+import { cartSchema, priceCart } from "../types";
 import { createResult } from "../utils";
 
 export interface CreateCartServiceOptions {
   db: DrizzleD1Database;
 }
 
-/**
- * A cart, stored whole.
- *
- * The caller hands over a complete `Cart` — its shape is validated before it
- * gets here — and this service only enforces what the aggregate cannot say on
- * its own:
- *
- * - the cart's city exists, and every line is an active product priced there;
- * - the cart's currency is the currency the city quotes those lines in;
- * - the delivery fee is charged once per order, not per line;
- * - the summary is exactly what the lines and that fee add up to.
- *
- * Everything else is stored as given: line prices are the snapshot the caller
- * took, so a later catalog edit never rewrites a line, and `updateCart` is a
- * full replacement of the stored cart rather than a diff.
- */
+/** The longest rental a cart can ask for. */
+const maxWeeks = 24;
 
-/** What a city knows about a product: the currency and the per-order fee. */
-interface CityOffer {
+/** The most units of one product a cart can hold. */
+const maxQuantity = 30;
+
+/**
+ * The most kinds of gear a cart can hold.
+ *
+ * The claim of a guest cart adds up its lines in one transaction, one
+ * statement per line, so the number of lines bounds how large that
+ * transaction can grow.
+ */
+const maxLines = 25;
+
+/**
+ * The guest's session token, hashed.
+ *
+ * The token is the guest's only key to the cart, so the database stores its
+ * hash: a leaked database gives away no live session. SHA-256 is enough here
+ * because the token is random and long, not a password.
+ */
+async function hashSessionToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Who owns the cart, as the two columns the `carts` row holds. */
+interface OwnerKey {
+  ownerType: CartOwnerTypeValue;
+  ownerId: string;
+}
+
+async function ownerKey(owner: CartOwner): Promise<OwnerKey> {
+  if (owner.kind === "user") {
+    return { ownerType: "user", ownerId: owner.userId };
+  }
+
+  return { ownerType: "guest", ownerId: await hashSessionToken(owner.sessionToken) };
+}
+
+/**
+ * The conditions that pick out one cart: by its id, or by its owner and the
+ * city it is in.
+ *
+ * Every statement of a cart read filters on the same conditions, so a cart is
+ * read the same way whether it is named by id or found by its owner.
+ */
+type CartScope = SQL;
+
+function scopeById(cartId: string): CartScope {
+  return eq(carts.id, cartId);
+}
+
+function scopeByOwner(key: OwnerKey, locationId: string): CartScope {
+  return and(
+    eq(carts.ownerType, key.ownerType),
+    eq(carts.ownerId, key.ownerId),
+    eq(carts.locationId, locationId),
+  )!;
+}
+
+/** The cart's own row, joined with the city it prices itself from. */
+interface CartRowView {
+  id: string;
+  ownerType: CartOwnerTypeValue;
+  ownerId: string;
+  locationId: string;
+  weeks: number;
   currency: string;
   deliveryFee: number;
 }
 
-/** A cart that passed the business rules, or the first rule it broke. */
-type CartCheck =
-  | { status: "ok" }
-  | { status: "read_failed" }
-  | { status: "location_not_found" }
-  | { status: "product_not_available"; productId: string }
-  | { status: "currency_mismatch"; productId: string; currency: string }
-  | { status: "summary_mismatch" };
-
-type CartCheckFailure = Exclude<CartCheck, { status: "ok" }>;
-
-/**
- * The money the lines and the city's delivery fees add up to. Deposits are per
- * unit like the weekly price; the delivery fee is the highest per-line fee, not
- * a sum that grows with the number of lines; only the weekly subtotal bills
- * again after the first week.
- */
-function summarize(cart: Cart, offers: Map<string, CityOffer>): ChargeSummary {
-  const { items, summary } = cart;
-  const weeklySubtotal = items.reduce((sum, item) => sum + item.weeklyPrice * item.quantity, 0);
-  const deposit = items.reduce((sum, item) => sum + (item.deposit ?? 0) * item.quantity, 0);
-  const deliveryFee = items.reduce(
-    (max, item) => Math.max(max, offers.get(item.productId)?.deliveryFee ?? 0),
-    0,
-  );
-
-  return {
-    currency: summary.currency,
-    weeklySubtotal,
-    deposit,
-    deliveryFee,
-    discount: summary.discount,
-    totalDueToday: weeklySubtotal + deposit + deliveryFee - summary.discount,
-    recurringWeekly: weeklySubtotal,
-  };
+/** A line as it is stored, joined with what the city charges for it. */
+interface CartLineView {
+  productId: string;
+  quantity: number;
+  name: string;
+  slug: string;
+  status: string;
+  weeklyPrice: number | null;
+  deposit: number | null;
+  stock: number | null;
 }
 
-/** Whether a caller's summary is the one its lines produce. */
-function summaryMatches(actual: ChargeSummary, expected: ChargeSummary): boolean {
-  return (
-    actual.currency === expected.currency &&
-    actual.weeklySubtotal === expected.weeklySubtotal &&
-    actual.deposit === expected.deposit &&
-    actual.deliveryFee === expected.deliveryFee &&
-    actual.discount === expected.discount &&
-    actual.totalDueToday === expected.totalDueToday &&
-    actual.recurringWeekly === expected.recurringWeekly
-  );
-}
-
-function toCartRow(cart: Cart, createdAt: Date, updatedAt: Date | null): CartRow {
-  return {
-    id: cart.id,
-    customerId: cart.customerId ?? null,
-    locationId: cart.locationId,
-    currency: cart.summary.currency,
-    weeklySubtotal: cart.summary.weeklySubtotal,
-    deposit: cart.summary.deposit,
-    deliveryFee: cart.summary.deliveryFee,
-    discount: cart.summary.discount,
-    totalDueToday: cart.summary.totalDueToday,
-    recurringWeekly: cart.summary.recurringWeekly,
-    expiresAt: cart.expiresAt ? new Date(cart.expiresAt) : null,
-    createdAt,
-    updatedAt,
-  };
-}
-
-/** The lines as rows, in the order the caller listed them. */
-function toCartItemRows(cartId: string, items: CartItem[]): CartItemRow[] {
-  return items.map((item, position) => ({
-    cartId,
-    position,
-    productId: item.productId,
-    name: item.name,
-    slug: item.slug,
-    imageUrl: item.image?.url ?? null,
-    imageAlt: item.image?.alt ?? null,
-    quantity: item.quantity,
-    weeklyPrice: item.weeklyPrice,
-    deposit: item.deposit ?? null,
-  }));
-}
+/** The outcome of reading a cart: the cart, or the reason there is none. */
+type CartRead = { status: "ok"; cart: Cart } | { status: "not_found" } | { status: "failed" };
 
 export function createCartService({ db }: CreateCartServiceOptions) {
-  const createCartResult = createResult(
-    cartSchema,
-    z.enum([
-      "cart_already_exists",
-      "cart_currency_mismatch",
-      "cart_summary_mismatch",
-      "location_not_found",
-      "product_not_available",
-      "failed_to_validate_cart",
-      "failed_to_save_cart",
-    ]),
-  );
-
-  const updateCartResult = createResult(
+  /**
+   * The two reads answer with the cart itself.
+   */
+  const getCartByOwnerResult = createResult(
     cartSchema,
     z.enum([
       "cart_not_found",
-      "cart_currency_mismatch",
-      "cart_summary_mismatch",
       "location_not_found",
-      "product_not_available",
-      "failed_to_validate_cart",
+      "location_not_available",
+      "failed_to_load_cart",
       "failed_to_save_cart",
     ]),
   );
 
-  /** Maps a broken rule onto the caller's error codes. */
-  function failureFor(check: CartCheckFailure, cart: Cart) {
-    switch (check.status) {
-      case "read_failed":
-        return { code: "failed_to_validate_cart", message: "Failed to validate cart" } as const;
-      case "location_not_found":
-        return {
-          code: "location_not_found",
-          message: `Location ${cart.locationId} not found`,
-        } as const;
-      case "product_not_available":
-        return {
-          code: "product_not_available",
-          message: `Product ${check.productId} is not available in ${cart.locationId}`,
-        } as const;
-      case "currency_mismatch":
-        return {
-          code: "cart_currency_mismatch",
-          message: `Product ${check.productId} is priced in ${check.currency}, not ${cart.summary.currency}`,
-        } as const;
-      case "summary_mismatch":
-        return {
-          code: "cart_summary_mismatch",
-          message: `Cart ${cart.id} summary does not match its lines`,
-        } as const;
-    }
+  const getCartByIdResult = createResult(
+    cartSchema,
+    z.enum(["cart_not_found", "failed_to_load_cart"]),
+  );
+
+  /**
+   * The changes answer with an acknowledgement: the cart is written, and the
+   * caller reads it again when it needs to see what changed.
+   */
+  const addItemResult = createResult(
+    z.void(),
+    z.enum([
+      "cart_not_found",
+      "product_not_available",
+      "product_out_of_stock",
+      "invalid_quantity",
+      "cart_is_full",
+      "failed_to_load_cart",
+      "failed_to_save_cart",
+    ]),
+  );
+
+  const setItemQuantityResult = createResult(
+    z.void(),
+    z.enum([
+      "cart_not_found",
+      "cart_item_not_found",
+      "product_not_available",
+      "product_out_of_stock",
+      "invalid_quantity",
+      "failed_to_load_cart",
+      "failed_to_save_cart",
+    ]),
+  );
+
+  const removeItemResult = createResult(
+    z.void(),
+    z.enum(["cart_not_found", "cart_item_not_found", "failed_to_load_cart", "failed_to_save_cart"]),
+  );
+
+  const setWeeksResult = createResult(
+    z.void(),
+    z.enum(["cart_not_found", "invalid_weeks", "failed_to_save_cart"]),
+  );
+
+  const clearCartResult = createResult(
+    z.void(),
+    z.enum(["cart_not_found", "failed_to_load_cart", "failed_to_save_cart"]),
+  );
+
+  const claimCartResult = createResult(
+    z.void(),
+    z.enum(["cart_not_found", "cart_not_claimable", "failed_to_load_cart", "failed_to_save_cart"]),
+  );
+
+  /**
+   * The cart's own row, joined with the city. One statement: the city is read
+   * with the cart because every cart read needs its currency and its fee.
+   */
+  function cartRow(scope: CartScope) {
+    return db
+      .select({
+        id: carts.id,
+        ownerType: carts.ownerType,
+        ownerId: carts.ownerId,
+        locationId: carts.locationId,
+        weeks: carts.weeks,
+        currency: locations.currency,
+        deliveryFee: locations.deliveryFee,
+      })
+      .from(carts)
+      .innerJoin(locations, eq(locations.id, carts.locationId))
+      .where(scope)
+      .limit(1);
   }
 
   /**
-   * The city's rentable products, keyed by product id: active products that
-   * have a price there, with the currency and delivery fee that price carries.
-   * One round trip, so a check costs two statements however many lines the cart
-   * holds.
+   * The lines of a cart, with the city's price for each and the product's own
+   * copy. A product that is archived or no longer priced in the city has no
+   * price here: the line is kept, so the visitor can remove it, but it is
+   * marked unavailable and stays out of the totals.
    */
-  async function loadOffers(
+  function cartLines(scope: CartScope) {
+    return db
+      .select({
+        productId: cartItems.productId,
+        quantity: cartItems.quantity,
+        name: products.name,
+        slug: products.slug,
+        status: products.status,
+        weeklyPrice: productPrices.weeklyPrice,
+        deposit: productPrices.deposit,
+        stock: productPrices.stock,
+      })
+      .from(cartItems)
+      .innerJoin(carts, eq(carts.id, cartItems.cartId))
+      .innerJoin(products, eq(products.id, cartItems.productId))
+      .leftJoin(
+        productPrices,
+        and(
+          eq(productPrices.productId, cartItems.productId),
+          eq(productPrices.locationId, carts.locationId),
+        ),
+      )
+      .where(scope)
+      .orderBy(asc(products.name));
+  }
+
+  /**
+   * The photos of the products in the cart, in the order the catalog shows
+   * them: the first photo of a product is the one on its card.
+   */
+  function cartImages(scope: CartScope) {
+    return db
+      .select({
+        productId: productImages.productId,
+        url: productImages.url,
+        alt: productImages.alt,
+      })
+      .from(productImages)
+      .innerJoin(cartItems, eq(cartItems.productId, productImages.productId))
+      .innerJoin(carts, eq(carts.id, cartItems.cartId))
+      .where(scope)
+      .orderBy(asc(productImages.productId), asc(productImages.position));
+  }
+
+  /**
+   * The city a cart is in, read on its own: a cart is only ever created in a
+   * city that is open.
+   */
+  function locationRow(locationId: string) {
+    return db
+      .select({
+        id: locations.id,
+        status: locations.status,
+      })
+      .from(locations)
+      .where(eq(locations.id, locationId))
+      .limit(1);
+  }
+
+  /**
+   * What the city charges for a product in the cart's city, and whether it can
+   * be rented there at all. A product that is archived or has no price in the
+   * city is not available.
+   */
+  function cartOffer(cartId: string, productId: string) {
+    return db
+      .select({
+        weeklyPrice: productPrices.weeklyPrice,
+        deposit: productPrices.deposit,
+        stock: productPrices.stock,
+      })
+      .from(carts)
+      .innerJoin(
+        productPrices,
+        and(eq(productPrices.locationId, carts.locationId), eq(productPrices.productId, productId)),
+      )
+      .innerJoin(
+        products,
+        and(eq(products.id, productPrices.productId), eq(products.status, "active")),
+      )
+      .where(eq(carts.id, cartId));
+  }
+
+  /** How many units of a product the cart already holds. */
+  function cartQuantity(cartId: string, productId: string) {
+    return db
+      .select({ quantity: cartItems.quantity })
+      .from(cartItems)
+      .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)));
+  }
+
+  /** How many kinds of gear the cart holds. */
+  function cartLineCount(cartId: string) {
+    return db.select({ value: count() }).from(cartItems).where(eq(cartItems.cartId, cartId));
+  }
+
+  /**
+   * The lines of a cart with the city's price for each, without the product's
+   * own copy: what a claim adds up.
+   */
+  function cartPricedLines(scope: CartScope) {
+    return db
+      .select({
+        productId: cartItems.productId,
+        quantity: cartItems.quantity,
+        weeklyPrice: productPrices.weeklyPrice,
+        stock: productPrices.stock,
+      })
+      .from(cartItems)
+      .innerJoin(carts, eq(carts.id, cartItems.cartId))
+      .leftJoin(
+        productPrices,
+        and(
+          eq(productPrices.productId, cartItems.productId),
+          eq(productPrices.locationId, carts.locationId),
+        ),
+      )
+      .where(scope);
+  }
+
+  /** The first photo of every product, in the order the photos come back. */
+  function firstImageByProduct(
+    rows: { productId: string; url: string; alt: string | null }[],
+  ): Map<string, { url: string; alt?: string }> {
+    const images = new Map<string, { url: string; alt?: string }>();
+
+    for (const row of rows) {
+      if (images.has(row.productId)) continue;
+
+      images.set(row.productId, { url: row.url, alt: row.alt ?? undefined });
+    }
+
+    return images;
+  }
+
+  /** Builds the domain cart from its row, its lines and the city's prices. */
+  function toCart(
+    row: CartRowView,
+    lines: CartLineView[],
+    images: Map<string, { url: string; alt?: string }>,
+  ): Cart {
+    const items: CartItem[] = lines.map((line) => {
+      const available = line.status === "active" && line.weeklyPrice !== null;
+
+      return {
+        productId: line.productId,
+        name: line.name,
+        slug: line.slug,
+        image: images.get(line.productId),
+        quantity: line.quantity,
+        weeklyPrice: line.weeklyPrice ?? 0,
+        deposit: line.deposit ?? undefined,
+        available,
+      };
+    });
+
+    const priceable = lines
+      .filter((line) => line.status === "active" && line.weeklyPrice !== null)
+      .map((line) => ({
+        weeklyPrice: line.weeklyPrice as number,
+        deposit: line.deposit ?? undefined,
+        quantity: line.quantity,
+      }));
+
+    return {
+      id: row.id,
+      locationId: row.locationId,
+      currency: row.currency,
+      weeks: row.weeks,
+      items,
+      summary: priceCart({
+        currency: row.currency,
+        deliveryFee: row.deliveryFee,
+        lines: priceable,
+      }),
+    };
+  }
+
+  /**
+   * A cart with its lines and photos, in one round trip.
+   *
+   * The three statements do not depend on each other — each finds the cart on
+   * its own — so they run as one batch. The number of statements is the same
+   * whether the cart holds one line or twenty.
+   */
+  async function loadCart(scope: CartScope): Promise<CartRead> {
+    const batch = await db
+      .batch([cartRow(scope), cartLines(scope), cartImages(scope)])
+      .catch(() => null);
+
+    if (!batch) return { status: "failed" };
+
+    const [rowRows, lineRows, imageRows] = batch;
+    const [row] = rowRows;
+
+    if (!row) return { status: "not_found" };
+
+    return { status: "ok", cart: toCart(row, lineRows, firstImageByProduct(imageRows)) };
+  }
+
+  /**
+   * The visitor's cart for one city, created on the first visit.
+   *
+   * A visitor has one cart per city: the city is part of the cart's identity,
+   * so the prices of a Bali cart never mix with the prices of a Lisbon one.
+   */
+  async function getCartByOwner(
+    owner: CartOwner,
     locationId: string,
-    productIds: string[],
-  ): Promise<Map<string, CityOffer> | null> {
-    if (productIds.length === 0) return new Map();
+  ): Promise<z.infer<(typeof getCartByOwnerResult)["schema"]>> {
+    const { success, failed } = getCartByOwnerResult;
+
+    const key = await ownerKey(owner);
+    const scope = scopeByOwner(key, locationId);
+
+    const batch = await db
+      .batch([locationRow(locationId), cartRow(scope), cartLines(scope), cartImages(scope)])
+      .catch(() => null);
+
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+
+    const [locationRows, rowRows, lineRows, imageRows] = batch;
+    const [location] = locationRows;
+
+    if (!location) return failed("location_not_found", `Location ${locationId} not found`);
+    if (location.status !== "active") {
+      return failed("location_not_available", `Location ${locationId} is not open yet`);
+    }
+
+    const [row] = rowRows;
+
+    if (row) {
+      return success(toCart(row, lineRows, firstImageByProduct(imageRows)));
+    }
+
+    // The first visit creates the cart. Two visits at once would both try to
+    // create it, so the insert gives way to the one that came first.
+    const created = await db
+      .insert(carts)
+      .values({
+        id: crypto.randomUUID(),
+        ownerType: key.ownerType,
+        ownerId: key.ownerId,
+        locationId,
+        weeks: 1,
+      })
+      .onConflictDoNothing()
+      .returning({ id: carts.id })
+      .catch(() => null);
+
+    if (!created) return failed("failed_to_save_cart", "Failed to save cart");
+
+    const read = await loadCart(scope);
+    if (read.status === "failed") return failed("failed_to_load_cart", "Failed to load cart");
+    if (read.status === "not_found") return failed("cart_not_found", "Cart not found");
+
+    return success(read.cart);
+  }
+
+  /**
+   * One cart by id.
+   *
+   * The id is the key to the cart: whoever holds it can change it. It is a
+   * capability, so it is unguessable and never travels in a URL the visitor
+   * can be tricked into sharing.
+   */
+  async function getCartById(
+    cartId: string,
+  ): Promise<z.infer<(typeof getCartByIdResult)["schema"]>> {
+    const { success, failed } = getCartByIdResult;
+
+    const read = await loadCart(scopeById(cartId));
+    if (read.status === "failed") return failed("failed_to_load_cart", "Failed to load cart");
+    if (read.status === "not_found") return failed("cart_not_found", `Cart ${cartId} not found`);
+
+    return success(read.cart);
+  }
+
+  /**
+   * Puts gear in the cart, or adds to what is already there.
+   *
+   * The product has to be rentable in the cart's city, and the cart may not
+   * hold more units of it than the city has left.
+   */
+  async function addItem(
+    cartId: string,
+    productId: string,
+    quantity = 1,
+  ): Promise<z.infer<(typeof addItemResult)["schema"]>> {
+    const { success, failed } = addItemResult;
+
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > maxQuantity) {
+      return failed(
+        "invalid_quantity",
+        `Quantity must be a whole number between 1 and ${maxQuantity}`,
+      );
+    }
 
     const batch = await db
       .batch([
-        db
-          .select({
-            productId: productPrices.productId,
-            currency: productPrices.currency,
-            deliveryFee: productPrices.deliveryFee,
-          })
-          .from(productPrices)
-          .where(
-            and(
-              inArray(productPrices.productId, productIds),
-              eq(productPrices.locationId, locationId),
-            ),
-          ),
-        db
-          .select({ id: products.id })
-          .from(products)
-          .where(and(inArray(products.id, productIds), eq(products.status, "active"))),
+        cartRow(scopeById(cartId)),
+        cartOffer(cartId, productId),
+        cartQuantity(cartId, productId),
+        cartLineCount(cartId),
       ])
       .catch(() => null);
 
-    if (!batch) return null;
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
 
-    const [priceRows, activeRows] = batch;
-    const active = new Set(activeRows.map((row) => row.id));
-    const offers = new Map<string, CityOffer>();
+    const [rowRows, offerRows, quantityRows, countRows] = batch;
+    const [row] = rowRows;
 
-    for (const row of priceRows) {
-      if (!active.has(row.productId)) continue;
+    if (!row) return failed("cart_not_found", `Cart ${cartId} not found`);
 
-      offers.set(row.productId, {
-        currency: row.currency,
-        deliveryFee: row.deliveryFee ?? 0,
-      });
+    const [offer] = offerRows;
+
+    if (!offer) {
+      return failed(
+        "product_not_available",
+        `Product ${productId} is not available in ${row.locationId}`,
+      );
     }
 
-    return offers;
-  }
+    const current = quantityRows[0]?.quantity ?? 0;
+    const wanted = current + quantity;
 
-  /** The business rules a cart has to satisfy before it is stored. */
-  async function checkCart(cart: Cart): Promise<CartCheck> {
-    const locationRows = await db
-      .select({ id: locations.id })
-      .from(locations)
-      .where(eq(locations.id, cart.locationId))
-      .limit(1)
+    if (wanted > maxQuantity) {
+      return failed("invalid_quantity", `A cart holds at most ${maxQuantity} units of a product`);
+    }
+    if (offer.stock !== null && wanted > offer.stock) {
+      return failed(
+        "product_out_of_stock",
+        `Only ${offer.stock} of ${productId} available in ${row.locationId}`,
+      );
+    }
+
+    const lines = countRows[0]?.value ?? 0;
+
+    if (current === 0 && lines >= maxLines) {
+      return failed("cart_is_full", `A cart holds at most ${maxLines} kinds of gear`);
+    }
+
+    const saved = await db
+      .insert(cartItems)
+      .values({ cartId, productId, quantity })
+      .onConflictDoUpdate({
+        target: [cartItems.cartId, cartItems.productId],
+        set: { quantity: sql`${cartItems.quantity} + ${quantity}` },
+      })
       .catch(() => null);
 
-    if (!locationRows) return { status: "read_failed" };
-    if (locationRows.length === 0) return { status: "location_not_found" };
+    if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
 
-    const productIds = [...new Set(cart.items.map((item) => item.productId))];
-    const offers = await loadOffers(cart.locationId, productIds);
-    if (!offers) return { status: "read_failed" };
-
-    for (const item of cart.items) {
-      const offer = offers.get(item.productId);
-      if (!offer) return { status: "product_not_available", productId: item.productId };
-      if (offer.currency !== cart.summary.currency)
-        return {
-          status: "currency_mismatch",
-          productId: item.productId,
-          currency: offer.currency,
-        };
-    }
-
-    return summaryMatches(cart.summary, summarize(cart, offers))
-      ? { status: "ok" }
-      : { status: "summary_mismatch" };
+    return success();
   }
 
   /**
-   * Writes the cart row and its lines as one transaction. An update clears the
-   * lines already stored first, so the cart on disk is the cart passed in.
+   * Sets how many units of a product the cart holds. Zero removes the line,
+   * which is also how a line that is no longer available is cleared.
    */
-  async function writeCart(row: CartRow, items: CartItemRow[], replace: boolean): Promise<boolean> {
-    const saved = await db
+  async function setItemQuantity(
+    cartId: string,
+    productId: string,
+    quantity: number,
+  ): Promise<z.infer<(typeof setItemQuantityResult)["schema"]>> {
+    const { success, failed } = setItemQuantityResult;
+
+    if (!Number.isInteger(quantity) || quantity < 0 || quantity > maxQuantity) {
+      return failed(
+        "invalid_quantity",
+        `Quantity must be a whole number between 0 and ${maxQuantity}`,
+      );
+    }
+
+    const batch = await db
       .batch([
-        replace
-          ? db.update(carts).set(row).where(eq(carts.id, row.id))
-          : db.insert(carts).values(row),
-        ...(replace ? [db.delete(cartItems).where(eq(cartItems.cartId, row.id))] : []),
-        ...(items.length > 0 ? [db.insert(cartItems).values(items)] : []),
+        cartRow(scopeById(cartId)),
+        cartOffer(cartId, productId),
+        cartQuantity(cartId, productId),
       ])
       .catch(() => null);
 
-    return saved !== null;
-  }
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
 
-  /** Stores a new cart. The id is the caller's, so it must be unused. */
-  async function createCart(cart: Cart): Promise<z.infer<(typeof createCartResult)["schema"]>> {
-    const { success, failed } = createCartResult;
+    const [rowRows, offerRows, quantityRows] = batch;
+    const [row] = rowRows;
 
-    const existing = await db
-      .select({ id: carts.id })
-      .from(carts)
-      .where(eq(carts.id, cart.id))
-      .limit(1)
-      .catch(() => null);
+    if (!row) return failed("cart_not_found", `Cart ${cartId} not found`);
 
-    if (!existing) return failed("failed_to_validate_cart", "Failed to validate cart");
-    if (existing.length > 0) return failed("cart_already_exists", `Cart ${cart.id} already exists`);
+    const current = quantityRows[0]?.quantity ?? 0;
 
-    const check = await checkCart(cart);
-    if (check.status !== "ok") {
-      const failure = failureFor(check, cart);
-      return failed(failure.code, failure.message);
+    if (quantity === 0) {
+      if (current === 0) {
+        return failed("cart_item_not_found", `Product ${productId} is not in the cart`);
+      }
+
+      const removed = await db
+        .delete(cartItems)
+        .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)))
+        .catch(() => null);
+
+      if (!removed) return failed("failed_to_save_cart", "Failed to save cart");
+
+      return success();
     }
 
-    const saved = await writeCart(
-      toCartRow(cart, new Date(), null),
-      toCartItemRows(cart.id, cart.items),
-      false,
-    );
-    if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
+    const [offer] = offerRows;
 
-    return success(cart);
-  }
-
-  /** Replaces a stored cart with the caller's version of it. */
-  async function updateCart(cart: Cart): Promise<z.infer<(typeof updateCartResult)["schema"]>> {
-    const { success, failed } = updateCartResult;
-
-    const existing = await db
-      .select({ createdAt: carts.createdAt })
-      .from(carts)
-      .where(eq(carts.id, cart.id))
-      .limit(1)
-      .catch(() => null);
-
-    if (!existing) return failed("failed_to_validate_cart", "Failed to validate cart");
-
-    const [row] = existing;
-    if (!row) return failed("cart_not_found", `Cart ${cart.id} not found`);
-
-    const check = await checkCart(cart);
-    if (check.status !== "ok") {
-      const failure = failureFor(check, cart);
-      return failed(failure.code, failure.message);
+    if (!offer) {
+      return failed(
+        "product_not_available",
+        `Product ${productId} is not available in ${row.locationId}`,
+      );
     }
 
-    const saved = await writeCart(
-      toCartRow(cart, row.createdAt, new Date()),
-      toCartItemRows(cart.id, cart.items),
-      true,
-    );
+    if (offer.stock !== null && quantity > offer.stock) {
+      return failed(
+        "product_out_of_stock",
+        `Only ${offer.stock} of ${productId} available in ${row.locationId}`,
+      );
+    }
+
+    const saved = await db
+      .insert(cartItems)
+      .values({ cartId, productId, quantity })
+      .onConflictDoUpdate({
+        target: [cartItems.cartId, cartItems.productId],
+        set: { quantity },
+      })
+      .catch(() => null);
+
     if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
 
-    return success(cart);
+    return success();
+  }
+
+  /** Takes a product out of the cart. */
+  async function removeItem(
+    cartId: string,
+    productId: string,
+  ): Promise<z.infer<(typeof removeItemResult)["schema"]>> {
+    const { success, failed } = removeItemResult;
+
+    const batch = await db
+      .batch([cartRow(scopeById(cartId)), cartQuantity(cartId, productId)])
+      .catch(() => null);
+
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+
+    const [rowRows, quantityRows] = batch;
+    const [row] = rowRows;
+
+    if (!row) return failed("cart_not_found", `Cart ${cartId} not found`);
+
+    const current = quantityRows[0]?.quantity ?? 0;
+
+    if (current === 0) {
+      return failed("cart_item_not_found", `Product ${productId} is not in the cart`);
+    }
+
+    const removed = await db
+      .delete(cartItems)
+      .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)))
+      .catch(() => null);
+
+    if (!removed) return failed("failed_to_save_cart", "Failed to save cart");
+
+    return success();
+  }
+
+  /**
+   * Sets how long the rental runs. The rent is billed weekly, so the length
+   * changes how many weeks are billed, not what is due today.
+   */
+  async function setWeeks(
+    cartId: string,
+    weeks: number,
+  ): Promise<z.infer<(typeof setWeeksResult)["schema"]>> {
+    const { success, failed } = setWeeksResult;
+
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > maxWeeks) {
+      return failed("invalid_weeks", `Weeks must be a whole number between 1 and ${maxWeeks}`);
+    }
+
+    const saved = await db
+      .update(carts)
+      .set({ weeks, updatedAt: new Date() })
+      .where(eq(carts.id, cartId))
+      .returning({ id: carts.id })
+      .catch(() => null);
+
+    if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
+    if (saved.length === 0) return failed("cart_not_found", `Cart ${cartId} not found`);
+
+    return success();
+  }
+
+  /** Empties the cart. The cart itself stays, so it keeps its id. */
+  async function clearCart(cartId: string): Promise<z.infer<(typeof clearCartResult)["schema"]>> {
+    const { success, failed } = clearCartResult;
+
+    const batch = await db
+      .batch([cartRow(scopeById(cartId)), db.delete(cartItems).where(eq(cartItems.cartId, cartId))])
+      .catch(() => null);
+
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+
+    const [rowRows] = batch;
+    const [row] = rowRows;
+
+    if (!row) return failed("cart_not_found", `Cart ${cartId} not found`);
+
+    return success();
+  }
+
+  /**
+   * The visitor's cart in the city another cart is in.
+   *
+   * The city is named by the other cart, so a visitor who signs in keeps the
+   * basket in the city they were shopping in. The city is read as a subquery,
+   * so the lookup stays one statement.
+   */
+  function scopeByUserInCartCity(userId: string, cartId: string): CartScope {
+    return and(
+      eq(carts.ownerType, "user"),
+      eq(carts.ownerId, userId),
+      eq(
+        carts.locationId,
+        db.select({ locationId: carts.locationId }).from(carts).where(eq(carts.id, cartId)),
+      ),
+    )!;
+  }
+
+  /**
+   * Hands a guest's cart to the visitor who just signed in.
+   *
+   * If the visitor already has a cart in that city, the two are merged: the
+   * units of the guest cart are added to the visitor's cart, up to what the
+   * city has left, and the guest cart is thrown away.
+   */
+  async function claimCart(
+    cartId: string,
+    userId: string,
+  ): Promise<z.infer<(typeof claimCartResult)["schema"]>> {
+    const { success, failed } = claimCartResult;
+
+    const guestScope = scopeById(cartId);
+    const userScope = scopeByUserInCartCity(userId, cartId);
+
+    const batch = await db
+      .batch([
+        cartRow(guestScope),
+        cartRow(userScope),
+        cartPricedLines(guestScope),
+        cartPricedLines(userScope),
+      ])
+      .catch(() => null);
+
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+
+    const [guestRows, userRows, guestLineRows, userLineRows] = batch;
+    const [guestCart] = guestRows;
+
+    if (!guestCart) return failed("cart_not_found", `Cart ${cartId} not found`);
+    if (guestCart.ownerType !== "guest") {
+      return failed("cart_not_claimable", `Cart ${cartId} does not belong to a guest`);
+    }
+
+    const [userCart] = userRows;
+
+    // The visitor has no cart in that city yet: the guest's cart simply
+    // becomes theirs.
+    if (!userCart) {
+      const claimed = await db
+        .update(carts)
+        .set({ ownerType: "user", ownerId: userId, updatedAt: new Date() })
+        .where(eq(carts.id, cartId))
+        .catch(() => null);
+
+      if (!claimed) return failed("failed_to_save_cart", "Failed to save cart");
+
+      return success();
+    }
+
+    const held = new Map(userLineRows.map((line) => [line.productId, line.quantity]));
+
+    const merged = guestLineRows.map((line) => {
+      const current = held.get(line.productId) ?? 0;
+      const wanted = current + line.quantity;
+      const capped = line.stock === null ? wanted : Math.min(wanted, line.stock);
+
+      return { productId: line.productId, quantity: Math.min(capped, maxQuantity) };
+    });
+
+    // The guest cart is empty: there is nothing to move, so it just goes.
+    if (merged.length === 0) {
+      const dropped = await db
+        .delete(carts)
+        .where(eq(carts.id, cartId))
+        .catch(() => null);
+      if (!dropped) return failed("failed_to_save_cart", "Failed to save cart");
+
+      return success();
+    }
+
+    // The lines move and the guest cart goes in one transaction, so the
+    // visitor's cart is never left half merged. The lines go in as one
+    // statement, so the size of the guest cart does not spread the transaction
+    // over one statement per line.
+    const saved = await db
+      .batch([
+        db
+          .insert(cartItems)
+          .values(
+            merged.map((line) => ({
+              cartId: userCart.id,
+              productId: line.productId,
+              quantity: line.quantity,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: [cartItems.cartId, cartItems.productId],
+            set: { quantity: sql`excluded.quantity` },
+          }),
+        db.delete(carts).where(eq(carts.id, cartId)),
+      ])
+      .catch(() => null);
+
+    if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
+
+    return success();
   }
 
   return {
-    createCart,
-    updateCart,
+    getCartByOwner,
+    getCartById,
+    addItem,
+    setItemQuantity,
+    removeItem,
+    setWeeks,
+    clearCart,
+    claimCart,
   };
 }

@@ -29,6 +29,10 @@ function applyMigrations(sqlite: DatabaseSync): void {
 export interface TestDatabase {
   db: DrizzleD1Database;
   sqlite: DatabaseSync;
+  /** How many statements the service has sent so far. */
+  statements: () => number;
+  /** How many round trips (batches and single statements) the service has made. */
+  roundTrips: () => number;
 }
 
 export function createTestDatabase(): TestDatabase {
@@ -36,9 +40,14 @@ export function createTestDatabase(): TestDatabase {
   sqlite.exec("pragma foreign_keys = on");
   applyMigrations(sqlite);
 
+  let statements = 0;
+  let roundTrips = 0;
+
   // `sqlite-proxy` hands rows back as arrays positional to the selected
   // columns, which is what drizzle's row mapper expects.
   const execute = (query: string, params: unknown[], method: string) => {
+    statements += 1;
+
     const statement = sqlite.prepare(query);
 
     if (method === "run") {
@@ -55,10 +64,16 @@ export function createTestDatabase(): TestDatabase {
   };
 
   const proxy = drizzle(
-    async (query, params, method) => execute(query, params, method),
+    async (query, params, method) => {
+      roundTrips += 1;
+
+      return execute(query, params, method);
+    },
     // Mirror D1: a batch is one transaction, and a failed statement rolls the
     // whole sequence back.
     async (batch) => {
+      roundTrips += 1;
+
       sqlite.exec("begin");
 
       try {
@@ -75,5 +90,10 @@ export function createTestDatabase(): TestDatabase {
 
   const db: DrizzleD1Database = fromAny(proxy);
 
-  return { db, sqlite };
+  return {
+    db,
+    sqlite,
+    statements: () => statements,
+    roundTrips: () => roundTrips,
+  };
 }

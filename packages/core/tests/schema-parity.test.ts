@@ -1,6 +1,7 @@
 import {
   billingAgreementStatusValues,
   billingIntervalValues,
+  cartOwnerTypeValues,
   fulfillmentStatusValues,
   locationStatusValues,
   paymentProviderValues,
@@ -12,6 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   billingAgreementStatusSchema,
   billingIntervalSchema,
+  cartOwnerTypeSchema,
   fulfillmentStatusSchema,
   locationStatusSchema,
   paymentProviderSchema,
@@ -56,5 +58,9 @@ describe("db enum values", () => {
 
   it("match billingIntervalSchema", () => {
     expect(billingIntervalValues).toEqual(billingIntervalSchema.options);
+  });
+
+  it("match cartOwnerTypeSchema", () => {
+    expect(cartOwnerTypeValues).toEqual(cartOwnerTypeSchema.options);
   });
 });
