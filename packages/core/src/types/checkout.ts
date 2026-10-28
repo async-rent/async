@@ -27,28 +27,6 @@ export const chargeSummarySchema = z.object({
 
 export type ChargeSummary = z.infer<typeof chargeSummarySchema>;
 
-/**
- * Who owns a cart.
- *
- * A signed-in visitor owns it by their user id; a guest owns it by the token
- * their browser carries. The token itself never reaches the database — only
- * its hash does — and the token is the guest's only key to the cart.
- */
-export const cartOwnerTypeSchema = z.enum(["user", "guest"]);
-
-export const cartOwnerSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("user"),
-    userId: z.string().describe("Stable user id of the signed-in visitor."),
-  }),
-  z.object({
-    kind: z.literal("guest"),
-    token: z.string().describe("Token of the guest's browser."),
-  }),
-]);
-
-export type CartOwner = z.infer<typeof cartOwnerSchema>;
-
 export const cartItemSchema = z.object({
   productId: z.string(),
   name: z.string().describe("Product name shown in the cart."),
@@ -61,18 +39,18 @@ export const cartItemSchema = z.object({
     .boolean()
     .describe(
       "False when the product is no longer offered in the cart's city. Such a " +
-        "line can still be removed, but it is not priced and not part of the totals.",
+        "line can still be set to zero, but it is not priced and not part of the totals.",
     ),
 });
 
 export type CartItem = z.infer<typeof cartItemSchema>;
 
 /**
- * What an owner has picked in one city.
+ * What a signed-in visitor has picked in one city.
  *
- * A cart has no id: it is found by its owner and the city. It holds what is in
- * it and nothing more — prices are the city's, read when the cart is read, so
- * the cart always shows what the city charges today. How long to rent is
+ * A cart has no id: it is found by its visitor and the city. It holds what is
+ * in it and nothing more — prices are the city's, read when the cart is read,
+ * so the cart always shows what the city charges today. How long to rent is
  * chosen at checkout.
  */
 export const cartSchema = z.object({

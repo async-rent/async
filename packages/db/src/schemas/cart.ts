@@ -8,23 +8,17 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import { enumValuesSql } from "../utils/enum";
 import { locations } from "./location";
 import { products } from "./product";
 import { timestamps } from "./timestamps";
 
 /**
- * Cart owner types, mirroring core's `cartOwnerTypeSchema`.
- *
- * `packages/db` cannot import core's zod schemas (core depends on db), so the
- * literal union lives here and a core-side test asserts parity.
- */
-export const cartOwnerTypeValues = ["user", "guest"] as const;
-
-export type CartOwnerTypeValue = (typeof cartOwnerTypeValues)[number];
-
-/**
  * Carts being filled before checkout.
+ *
+ * Only a signed-in visitor has a cart. `user_id` is the auth provider's stable
+ * user id — the same id `rentals.user_id` keeps — so the cart follows the
+ * person across devices. There is no local users table to point at, so the
+ * column itself is the relationship.
  *
  * The cart is a basket, not a quote: it holds *what* is in it and nothing
  * else. The money — the currency, the weekly prices, the deposit, the delivery
@@ -32,10 +26,6 @@ export type CartOwnerTypeValue = (typeof cartOwnerTypeValues)[number];
  * `product_prices` when the cart is read. That is why this table carries no
  * amount columns: there is no stored copy of a total that could disagree with
  * the catalog. The rental that a checkout creates is what freezes the prices.
- *
- * `owner_type` and `owner_id` say who the cart belongs to: a signed-in user
- * (their user id) or a guest (the hash of the token in their cookie).
- * A guest never stores the token itself, only its hash.
  *
  * The cart has no rental length: how long to rent is chosen at checkout,
  * together with the start date.
@@ -47,23 +37,18 @@ export const carts = sqliteTable(
   "carts",
   {
     id: text("id").primaryKey(),
-    ownerType: text("owner_type", { enum: cartOwnerTypeValues }).notNull(),
-    ownerId: text("owner_id").notNull(),
+    userId: text("user_id").notNull(),
     locationId: text("location_id")
       .notNull()
       .references(() => locations.id, { onDelete: "restrict", onUpdate: "cascade" }),
     ...timestamps,
   },
   (table) => [
-    check(
-      "carts_owner_type_check",
-      sql`${table.ownerType} in (${enumValuesSql(cartOwnerTypeValues)})`,
-    ),
-    // One cart per owner per city: the city is part of the cart's identity,
+    // One cart per visitor per city: the city is part of the cart's identity,
     // so a visitor has a basket in Bali and another in Lisbon.
-    uniqueIndex("carts_owner_location_unique").on(table.ownerType, table.ownerId, table.locationId),
-    // Serves the owner's cart in any city.
-    index("carts_owner_idx").on(table.ownerType, table.ownerId),
+    uniqueIndex("carts_user_location_unique").on(table.userId, table.locationId),
+    // Serves the visitor's cart in any city.
+    index("carts_user_id_idx").on(table.userId),
   ],
 );
 

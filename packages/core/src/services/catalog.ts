@@ -23,7 +23,7 @@ import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Category, Location, Product, ProductQuery, ProductSort } from "../types";
 import { categorySchema, locationSchema, productPageSchema, productSchema } from "../types";
-import { createResult } from "../utils";
+import { createResult, groupBy } from "../utils";
 
 export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
@@ -248,10 +248,10 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     ]);
 
     const categoryById = new Map(categoryRows.map((row) => [row.id, row]));
-    const imagesOf = Map.groupBy(imageRows, (row) => row.productId);
-    const highlightsOf = Map.groupBy(highlightRows, (row) => row.productId);
-    const specsOf = Map.groupBy(specRows, (row) => row.productId);
-    const pricesOf = Map.groupBy(priceRows, (row) => row.productId);
+    const imagesOf = groupBy(imageRows, (row) => row.productId);
+    const highlightsOf = groupBy(highlightRows, (row) => row.productId);
+    const specsOf = groupBy(specRows, (row) => row.productId);
+    const pricesOf = groupBy(priceRows, (row) => row.productId);
 
     return rows.flatMap((row) => {
       const category = categoryById.get(row.categoryId);

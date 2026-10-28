@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@async-rent/db": "workspace:*",
-    "@noble/hashes": "catalog:",
     "drizzle-orm": "catalog:",
     "uuid": "catalog:",
     "zod": "catalog:"

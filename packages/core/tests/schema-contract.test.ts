@@ -3,7 +3,6 @@ import {
   billingAgreements,
   billingIntervalValues,
   cartItems,
-  cartOwnerTypeValues,
   carts,
   fulfillmentStatusValues,
   liveBillingAgreementStatusValues,
@@ -320,14 +319,14 @@ describe("carts table", () => {
     );
   });
 
-  it("names its owner instead of a nullable customer column", () => {
+  it("names its visitor instead of a polymorphic owner", () => {
     const columns = getTableConfig(carts).columns;
 
-    const ownerType = columns.find((column) => column.name === "owner_type");
-    const ownerId = columns.find((column) => column.name === "owner_id");
+    const userId = columns.find((column) => column.name === "user_id");
 
-    expect(ownerType?.notNull).toBe(true);
-    expect(ownerId?.notNull).toBe(true);
+    expect(userId?.notNull).toBe(true);
+    expect(columns.map((column) => column.name)).not.toContain("owner_type");
+    expect(columns.map((column) => column.name)).not.toContain("owner_id");
     expect(columns.map((column) => column.name)).not.toContain("customer_id");
   });
 
@@ -343,12 +342,12 @@ describe("carts table", () => {
     expect(columns).not.toContain("recurring_weekly");
   });
 
-  it("gives every owner one cart per city", () => {
+  it("gives every visitor one cart per city", () => {
     expect(indexesOf(carts)).toContainEqual(
       expect.objectContaining({
-        name: "carts_owner_location_unique",
+        name: "carts_user_location_unique",
         unique: true,
-        columns: ["owner_type", "owner_id", "location_id"],
+        columns: ["user_id", "location_id"],
       }),
     );
   });
@@ -576,15 +575,6 @@ describe("check constraints", () => {
       "locations_delivery_fee_check",
       columnRef("locations", "delivery_fee"),
       ">= 0",
-    );
-  });
-
-  it("binds the cart's owner type to its own enum values", () => {
-    expectEnumCheck(
-      carts,
-      "carts_owner_type_check",
-      columnRef("carts", "owner_type"),
-      cartOwnerTypeValues,
     );
   });
 

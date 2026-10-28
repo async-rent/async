@@ -34,17 +34,15 @@ CREATE TABLE `cart_items` (
 CREATE INDEX `cart_items_product_id_idx` ON `cart_items` (`product_id`);--> statement-breakpoint
 CREATE TABLE `carts` (
 	`id` text PRIMARY KEY NOT NULL,
-	`owner_type` text NOT NULL,
-	`owner_id` text NOT NULL,
+	`user_id` text NOT NULL,
 	`location_id` text NOT NULL,
 	`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,
 	`updated_at` integer,
-	FOREIGN KEY (`location_id`) REFERENCES `locations`(`id`) ON UPDATE cascade ON DELETE restrict,
-	CONSTRAINT "carts_owner_type_check" CHECK("carts"."owner_type" in ('user', 'guest'))
+	FOREIGN KEY (`location_id`) REFERENCES `locations`(`id`) ON UPDATE cascade ON DELETE restrict
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `carts_owner_location_unique` ON `carts` (`owner_type`,`owner_id`,`location_id`);--> statement-breakpoint
-CREATE INDEX `carts_owner_idx` ON `carts` (`owner_type`,`owner_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `carts_user_location_unique` ON `carts` (`user_id`,`location_id`);--> statement-breakpoint
+CREATE INDEX `carts_user_id_idx` ON `carts` (`user_id`);--> statement-breakpoint
 CREATE TABLE `categories` (
 	`id` text PRIMARY KEY NOT NULL,
 	`slug` text NOT NULL,

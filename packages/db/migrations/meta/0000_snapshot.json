@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "40202c55-6b1b-4cdf-9a17-cf973ed994e5",
+  "id": "b49e65f7-e1f4-4f78-a04d-a0820cab7081",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "billing_agreements": {
@@ -247,15 +247,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "owner_type": {
-          "name": "owner_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "owner_id": {
-          "name": "owner_id",
+        "user_id": {
+          "name": "user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -285,20 +278,18 @@
         }
       },
       "indexes": {
-        "carts_owner_location_unique": {
-          "name": "carts_owner_location_unique",
+        "carts_user_location_unique": {
+          "name": "carts_user_location_unique",
           "columns": [
-            "owner_type",
-            "owner_id",
+            "user_id",
             "location_id"
           ],
           "isUnique": true
         },
-        "carts_owner_idx": {
-          "name": "carts_owner_idx",
+        "carts_user_id_idx": {
+          "name": "carts_user_id_idx",
           "columns": [
-            "owner_type",
-            "owner_id"
+            "user_id"
           ],
           "isUnique": false
         }
@@ -320,12 +311,7 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {
-        "carts_owner_type_check": {
-          "name": "carts_owner_type_check",
-          "value": "\"carts\".\"owner_type\" in ('user', 'guest')"
-        }
-      }
+      "checkConstraints": {}
     },
     "categories": {
       "name": "categories",
