@@ -30,10 +30,9 @@ export type ChargeSummary = z.infer<typeof chargeSummarySchema>;
 /**
  * Who owns a cart.
  *
- * A signed-in visitor owns it by their user id; a guest owns it by the
- * session token their browser carries. The token itself never reaches the
- * database — only its hash does — and the token is the guest's only key to
- * the cart, so the hash is what the cart row stores.
+ * A signed-in visitor owns it by their user id; a guest owns it by the token
+ * their browser carries. The token itself never reaches the database — only
+ * its hash does — and the token is the guest's only key to the cart.
  */
 export const cartOwnerTypeSchema = z.enum(["user", "guest"]);
 
@@ -44,7 +43,7 @@ export const cartOwnerSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("guest"),
-    sessionToken: z.string().describe("Session token of the guest's browser."),
+    token: z.string().describe("Token of the guest's browser."),
   }),
 ]);
 
@@ -54,18 +53,12 @@ export const cartItemSchema = z.object({
   productId: z.string(),
   name: z.string().describe("Product name shown in the cart."),
   slug: z.string().describe("Product slug for linking back to the catalog."),
-  image: imageSchema.optional(),
-  quantity: z.number().int().positive().default(1),
+  images: z.array(imageSchema).describe("Every photo of the product, the card photo first."),
+  quantity: z.number().int().positive(),
   weeklyPrice: amountSchema.describe("Weekly price in the cart's currency."),
-  deposit: z
-    .number()
-    .int()
-    .nonnegative()
-    .optional()
-    .describe("Refundable deposit per unit in the cart's currency."),
+  deposit: amountSchema.optional().describe("Refundable deposit per unit in the cart's currency."),
   available: z
     .boolean()
-    .default(true)
     .describe(
       "False when the product is no longer offered in the cart's city. Such a " +
         "line can still be removed, but it is not priced and not part of the totals.",
@@ -74,17 +67,17 @@ export const cartItemSchema = z.object({
 
 export type CartItem = z.infer<typeof cartItemSchema>;
 
+/**
+ * What an owner has picked in one city.
+ *
+ * A cart has no id: it is found by its owner and the city. It holds what is in
+ * it and nothing more — prices are the city's, read when the cart is read, so
+ * the cart always shows what the city charges today. How long to rent is
+ * chosen at checkout.
+ */
 export const cartSchema = z.object({
-  id: z.string().describe("Stable cart id."),
   locationId: z.string().describe("Stable location id this cart is for."),
   currency: currencyCodeSchema.describe("Currency the cart's city quotes in."),
-  weeks: z
-    .number()
-    .int()
-    .positive()
-    .max(52)
-    .default(1)
-    .describe("Rental length in weeks. The rent itself is billed weekly."),
   items: z.array(cartItemSchema),
   summary: chargeSummarySchema,
 });

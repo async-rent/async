@@ -107,6 +107,7 @@ export function makeCartItem(overrides: Partial<CartItem> = {}): CartItem {
     productId: "prod_smartdesk-pro",
     name: "SmartDesk Pro",
     slug: "smartdesk-pro",
+    images: [],
     quantity: 1,
     weeklyPrice: 12000,
     available: true,
@@ -116,10 +117,8 @@ export function makeCartItem(overrides: Partial<CartItem> = {}): CartItem {
 
 export function makeCart(overrides: Partial<Cart> = {}): Cart {
   return {
-    id: "cart_01",
     locationId: makeLocation().id,
     currency: "USD",
-    weeks: 1,
     items: [makeCartItem()],
     summary: makeChargeSummary(),
     ...overrides,

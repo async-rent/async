@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "145171b4-74eb-4a1c-b69a-53ee126407b6",
+  "id": "40202c55-6b1b-4cdf-9a17-cf973ed994e5",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "billing_agreements": {
@@ -268,14 +268,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "weeks": {
-          "name": "weeks",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 1
-        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -332,10 +324,6 @@
         "carts_owner_type_check": {
           "name": "carts_owner_type_check",
           "value": "\"carts\".\"owner_type\" in ('user', 'guest')"
-        },
-        "carts_weeks_check": {
-          "name": "carts_weeks_check",
-          "value": "\"carts\".\"weeks\" between 1 and 24"
         }
       }
     },

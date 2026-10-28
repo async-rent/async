@@ -588,10 +588,6 @@ describe("check constraints", () => {
     );
   });
 
-  it("binds the cart's rental length to its own bounds", () => {
-    expectCheckSql(carts, "carts_weeks_check", `${columnRef("carts", "weeks")} between 1 and 24`);
-  });
-
   it("pins the money checks of the payments table", () => {
     expectCurrencyCheck(payments, "payments_currency_check", columnRef("payments", "currency"));
     expectNumericCheck(

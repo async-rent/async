@@ -56,9 +56,10 @@ export function createTestDatabase(): TestDatabase {
       return { rows: [] };
     }
 
-    const columns = statement.columns().map((column) => column.name);
-    const rows = statement.all(...(params as never[])) as Record<string, unknown>[];
-    const values = rows.map((row) => columns.map((name) => row[name]));
+    // Arrays, not objects: a join selects columns that share a name, and an
+    // object would keep only the last of them.
+    statement.setReturnArrays(true);
+    const values = statement.all(...(params as never[])) as unknown as unknown[][];
 
     return { rows: method === "get" ? values.slice(0, 1) : values };
   };

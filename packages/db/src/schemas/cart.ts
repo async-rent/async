@@ -34,8 +34,11 @@ export type CartOwnerTypeValue = (typeof cartOwnerTypeValues)[number];
  * the catalog. The rental that a checkout creates is what freezes the prices.
  *
  * `owner_type` and `owner_id` say who the cart belongs to: a signed-in user
- * (their user id) or a guest (the hash of the session token in their cookie).
+ * (their user id) or a guest (the hash of the token in their cookie).
  * A guest never stores the token itself, only its hash.
+ *
+ * The cart has no rental length: how long to rent is chosen at checkout,
+ * together with the start date.
  *
  * The city is stored as `locations.id`, the same key `product_prices` uses, so
  * every location reference in the schema points at a primary key.
@@ -49,7 +52,6 @@ export const carts = sqliteTable(
     locationId: text("location_id")
       .notNull()
       .references(() => locations.id, { onDelete: "restrict", onUpdate: "cascade" }),
-    weeks: integer("weeks").notNull().default(1),
     ...timestamps,
   },
   (table) => [
@@ -57,7 +59,6 @@ export const carts = sqliteTable(
       "carts_owner_type_check",
       sql`${table.ownerType} in (${enumValuesSql(cartOwnerTypeValues)})`,
     ),
-    check("carts_weeks_check", sql`${table.weeks} between 1 and 24`),
     // One cart per owner per city: the city is part of the cart's identity,
     // so a visitor has a basket in Bali and another in Lisbon.
     uniqueIndex("carts_owner_location_unique").on(table.ownerType, table.ownerId, table.locationId),
