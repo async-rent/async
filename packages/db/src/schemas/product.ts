@@ -100,7 +100,12 @@ export const productSpecs = sqliteTable(
  * Weekly price and stock for one product in one city.
  *
  * A missing row means the product is not offered there. Amounts are minor
- * units in `currency` (USD today), matching the domain's `amountSchema`.
+ * units in the currency of the city (`locations.currency`), matching the
+ * domain's `amountSchema`.
+ *
+ * The currency and the delivery fee are not repeated here: they belong to the
+ * city, so every price in a city is in the same currency and an order pays
+ * delivery once, not once per product.
  */
 export const productPrices = sqliteTable(
   "product_prices",
@@ -111,25 +116,15 @@ export const productPrices = sqliteTable(
     locationId: text("location_id")
       .notNull()
       .references(() => locations.id, { onDelete: "restrict", onUpdate: "cascade" }),
-    currency: text("currency").notNull(),
     weeklyPrice: integer("weekly_price").notNull(),
     deposit: integer("deposit"),
-    deliveryFee: integer("delivery_fee"),
     stock: integer("stock"),
     ...timestamps,
   },
   (table) => [
     primaryKey({ columns: [table.productId, table.locationId], name: "product_prices_pk" }),
-    check(
-      "product_prices_currency_check",
-      sql`length(${table.currency}) = 3 and ${table.currency} glob '[A-Z][A-Z][A-Z]'`,
-    ),
     check("product_prices_weekly_price_check", sql`${table.weeklyPrice} >= 0`),
     check("product_prices_deposit_check", sql`${table.deposit} is null or ${table.deposit} >= 0`),
-    check(
-      "product_prices_delivery_fee_check",
-      sql`${table.deliveryFee} is null or ${table.deliveryFee} >= 0`,
-    ),
     check("product_prices_stock_check", sql`${table.stock} is null or ${table.stock} >= 0`),
     index("product_prices_location_id_idx").on(table.locationId),
   ],

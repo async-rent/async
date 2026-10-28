@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1792876969174,
-      "tag": "0000_gear_and_cities",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1792880197670,
-      "tag": "0001_carts_rentals_payments_billing",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1792918525997,
-      "tag": "0002_rename_rental_clerk_user_id_to_user_id",
+      "when": 1793206972879,
+      "tag": "0000_initial_schema",
       "breakpoints": true
     }
   ]
