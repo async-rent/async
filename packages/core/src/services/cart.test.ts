@@ -316,6 +316,18 @@ describe("addItem", () => {
     expect(lines(cart)).toEqual([["prd_chair", 3]]);
   });
 
+  it("lands both of two adds that overlap", async () => {
+    const { service } = setup();
+
+    const [first, second] = await Promise.all([
+      service.addItem(user, "loc_bali", "prd_chair"),
+      service.addItem(user, "loc_bali", "prd_chair"),
+    ]);
+
+    expect([first.success, second.success]).toEqual([true, true]);
+    expect(lines(cartOf(await service.getCart(user, "loc_bali")))).toEqual([["prd_chair", 2]]);
+  });
+
   it("charges delivery once for the order, not per line", async () => {
     const { service } = setup();
 
@@ -462,6 +474,16 @@ describe("setItemQuantity", () => {
     );
 
     expect(cart.items).toEqual([]);
+  });
+
+  it("refuses a product that is not in the cart", async () => {
+    const { service } = setup();
+
+    await expect(service.setItemQuantity(user, "loc_bali", "prd_chair", 2)).resolves.toMatchObject({
+      success: false,
+      error: { code: "cart_item_not_found" },
+    });
+    expect(cartOf(await service.getCart(user, "loc_bali")).items).toEqual([]);
   });
 
   it("refuses more units than the city has left", async () => {
@@ -631,6 +653,27 @@ describe("mergeCart", () => {
     await context.service.mergeCart(guest.token, "user_01", "loc_bali");
 
     expect(context.roundTrips() - before).toBe(2);
+  });
+
+  it("moves a full cart without binding more parameters than D1 allows", async () => {
+    const context = setup();
+
+    for (let index = 0; index < 25; index++) {
+      insertProduct(context, {
+        id: `prd_filler_${index}`,
+        name: `Filler ${index}`,
+        prices: [{ locationId: "loc_bali", weeklyPrice: 1000 }],
+      });
+      await context.service.addItem(guest, "loc_bali", `prd_filler_${index}`);
+    }
+
+    await expect(
+      context.service.mergeCart(guest.token, "user_01", "loc_bali"),
+    ).resolves.toMatchObject({ success: true });
+    expect(lines(cartOf(await context.service.getCart(user, "loc_bali")))).toHaveLength(25);
+    // D1 fails a statement that binds more than 100 parameters; `node:sqlite`
+    // would happily take them, so the count is asserted here instead.
+    expect(context.maxParameters()).toBeLessThanOrEqual(100);
   });
 });
 

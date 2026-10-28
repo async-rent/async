@@ -33,6 +33,8 @@ export interface TestDatabase {
   statements: () => number;
   /** How many round trips (batches and single statements) the service has made. */
   roundTrips: () => number;
+  /** The most parameters any one statement has bound. D1 caps this at 100. */
+  maxParameters: () => number;
 }
 
 export function createTestDatabase(): TestDatabase {
@@ -42,11 +44,13 @@ export function createTestDatabase(): TestDatabase {
 
   let statements = 0;
   let roundTrips = 0;
+  let maxParameters = 0;
 
   // `sqlite-proxy` hands rows back as arrays positional to the selected
   // columns, which is what drizzle's row mapper expects.
   const execute = (query: string, params: unknown[], method: string) => {
     statements += 1;
+    maxParameters = Math.max(maxParameters, params.length);
 
     const statement = sqlite.prepare(query);
 
@@ -96,5 +100,6 @@ export function createTestDatabase(): TestDatabase {
     sqlite,
     statements: () => statements,
     roundTrips: () => roundTrips,
+    maxParameters: () => maxParameters,
   };
 }

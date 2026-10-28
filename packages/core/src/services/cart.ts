@@ -35,6 +35,32 @@ const maxQuantity = 30;
 /** The most kinds of gear a cart can hold. */
 const maxLines = 25;
 
+/**
+ * The most lines one insert carries. D1 binds at most 100 parameters in a
+ * statement and a merged line binds five — three for the cart lookup plus the
+ * product and the quantity — so the move is split below that ceiling.
+ */
+const linesPerInsert = 19;
+
+/** How a change moves a line: an add is relative, a set assigns a number. */
+type QuantityChange = { kind: "add"; units: number } | { kind: "set"; quantity: number };
+
+/** The units a line holds once `change` is applied to `current`. */
+function quantityAfter(current: number, change: QuantityChange): number {
+  return change.kind === "add" ? current + change.units : change.quantity;
+}
+
+/** Splits lines into inserts small enough for D1 to bind. */
+function inInsertSizedChunks<T>(items: T[]): T[][] {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += linesPerInsert) {
+    chunks.push(items.slice(index, index + linesPerInsert));
+  }
+
+  return chunks;
+}
+
 const inRange = (value: number, min: number, max: number): boolean =>
   Number.isInteger(value) && value >= min && value <= max;
 
@@ -147,6 +173,7 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       "product_out_of_stock",
       "invalid_quantity",
       "cart_is_full",
+      "cart_item_not_found",
       "failed_to_load_cart",
       "failed_to_save_cart",
     ]),
@@ -217,15 +244,17 @@ export function createCartService({ db }: CreateCartServiceOptions) {
   }
 
   /**
-   * Puts a product in the cart at the quantity `next` works out from the one
-   * already there. The product has to be rentable in the city, and the cart
-   * may not hold more units of it than the city has left.
+   * Puts a product in the cart, moving its line by `change`. An add is written
+   * as a relative increment, so two adds that overlap both land; a set assigns
+   * the number the visitor picked, and needs the line to be there already. The
+   * product has to be rentable in the city, and the cart may not hold more
+   * units of it than the city has left.
    */
   async function putItem(
     owner: CartOwner,
     locationId: string,
     productId: string,
-    next: (current: number) => number,
+    change: QuantityChange,
   ): Promise<z.infer<(typeof changeItemResult)["schema"]>> {
     const { success, failed } = changeItemResult;
     const key = ownerKey(owner);
@@ -267,7 +296,10 @@ export function createCartService({ db }: CreateCartServiceOptions) {
 
     const held = rows.flatMap((row) => (row.item ? [row.item] : []));
     const line = held.find((item) => item.productId === productId);
-    const quantity = next(line?.quantity ?? 0);
+    if (change.kind === "set" && !line) {
+      return failed("cart_item_not_found", `Product ${productId} is not in the cart`);
+    }
+    const quantity = quantityAfter(line?.quantity ?? 0, change);
 
     if (quantity > maxQuantity) {
       return failed("invalid_quantity", `A cart holds at most ${maxQuantity} units of a product`);
@@ -282,15 +314,21 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       return failed("cart_is_full", `A cart holds at most ${maxLines} kinds of gear`);
     }
 
+    // An add on a new line starts at its units; an add on an existing line is
+    // the increment the conflict branch writes, never the stale total.
+    const inserted = change.kind === "add" ? change.units : change.quantity;
     const saved = await db
       .batch([
         ensureCart(key, locationId),
         db
           .insert(cartItems)
-          .values({ cartId: sql`(${cartIdOf(scope)})`, productId, quantity })
+          .values({ cartId: sql`(${cartIdOf(scope)})`, productId, quantity: inserted })
           .onConflictDoUpdate({
             target: [cartItems.cartId, cartItems.productId],
-            set: { quantity },
+            set:
+              change.kind === "add"
+                ? { quantity: sql`${cartItems.quantity} + ${change.units}` }
+                : { quantity: change.quantity },
           }),
       ])
       .catch(() => null);
@@ -315,10 +353,13 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       );
     }
 
-    return putItem(owner, locationId, productId, (current) => current + quantity);
+    return putItem(owner, locationId, productId, { kind: "add", units: quantity });
   }
 
-  /** Sets how many units of a product the cart holds. Zero removes the line. */
+  /**
+   * Sets how many units of a product the cart holds. The product has to be in
+   * the cart already; zero removes the line.
+   */
   async function setItemQuantity(
     owner: CartOwner,
     locationId: string,
@@ -335,7 +376,7 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     }
     if (quantity === 0) return removeItem(owner, locationId, productId);
 
-    return putItem(owner, locationId, productId, () => quantity);
+    return putItem(owner, locationId, productId, { kind: "set", quantity });
   }
 
   /** Takes a product out of the cart. Removing what is not there changes nothing. */
@@ -425,17 +466,20 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     }
 
     // The lines move and the guest's cart goes in one transaction, so the
-    // visitor's cart is never left half merged.
+    // visitor's cart is never left half merged. A full guest cart is more
+    // lines than one insert can bind, so the move is split into a few.
     const saved = await db
       .batch([
         ensureCart(userKey, locationId),
-        db
-          .insert(cartItems)
-          .values(merged.map((line) => ({ cartId: sql`(${cartIdOf(userScope)})`, ...line })))
-          .onConflictDoUpdate({
-            target: [cartItems.cartId, cartItems.productId],
-            set: { quantity: sql`excluded.quantity` },
-          }),
+        ...inInsertSizedChunks(merged).map((lines) =>
+          db
+            .insert(cartItems)
+            .values(lines.map((line) => ({ cartId: sql`(${cartIdOf(userScope)})`, ...line })))
+            .onConflictDoUpdate({
+              target: [cartItems.cartId, cartItems.productId],
+              set: { quantity: sql`excluded.quantity` },
+            }),
+        ),
         db.delete(carts).where(guestScope),
       ])
       .catch(() => null);
