@@ -1,10 +1,4 @@
-import type {
-  CartItemRow,
-  LocationRow,
-  ProductImageRow,
-  ProductPriceRow,
-  ProductRow,
-} from "@async-rent/db";
+import type { CartItemRow } from "@async-rent/db";
 import {
   cartItems,
   carts,
@@ -18,7 +12,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
-import type { Cart } from "../types";
+import type { CartItem } from "../types";
 import { cartSchema, priceCart } from "../types";
 import { createResult, groupBy } from "../utils";
 
@@ -36,63 +30,8 @@ const maxLines = 25;
 const cartScope = (userId: string, locationId: string): SQL =>
   and(eq(carts.userId, userId), eq(carts.locationId, locationId))!;
 
-/** One row of the cart query: a line, and one photo of its product. */
-interface CartQueryRow {
-  item: CartItemRow | null;
-  product: Pick<ProductRow, "name" | "slug" | "status"> | null;
-  price: ProductPriceRow | null;
-  image: Pick<ProductImageRow, "url" | "alt"> | null;
-}
-
-/**
- * Builds the domain cart. A line that can no longer be rented is kept so the
- * visitor can set it to zero, but it is marked unavailable and stays out of the
- * totals.
- */
-function toCart(
-  location: Pick<LocationRow, "id" | "currency" | "deliveryFee">,
-  rows: CartQueryRow[],
-): Cart {
-  const items = [
-    ...groupBy(
-      rows.filter(
-        (
-          row,
-        ): row is CartQueryRow & {
-          item: CartItemRow;
-          product: Pick<ProductRow, "name" | "slug" | "status">;
-        } => row.item !== null && row.product !== null,
-      ),
-      (row) => row.item.productId,
-    ),
-  ].map(([productId, lines]) => {
-    const [line] = lines;
-
-    return {
-      productId,
-      name: line.product.name,
-      slug: line.product.slug,
-      images: lines.flatMap(({ image }) =>
-        image ? [{ url: image.url, alt: image.alt ?? undefined }] : [],
-      ),
-      quantity: line.item.quantity,
-      weeklyPrice: line.price?.weeklyPrice ?? 0,
-      deposit: line.price?.deposit ?? undefined,
-      available: line.product.status === "active" && line.price !== null,
-    };
-  });
-
-  return {
-    locationId: location.id,
-    currency: location.currency,
-    items,
-    summary: priceCart({
-      currency: location.currency,
-      deliveryFee: location.deliveryFee,
-      lines: items.filter((item) => item.available),
-    }),
-  };
-}
+/** A stored line: what is in the cart, before the catalog fills in the rest. */
+type CartLine = Pick<CartItemRow, "productId" | "quantity">;
 
 export function createCartService({ db }: CreateCartServiceOptions) {
   const getCartResult = createResult(
@@ -133,9 +72,78 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       });
 
   /**
-   * The visitor's cart in one city. The city is the first table of the join, so
-   * a city with an empty cart still answers with one row, and a city that does
-   * not exist answers with none. Nothing is written until the first item.
+   * Fills the stored lines in from the catalog: the name, the photos and the
+   * price the city charges today. The products, prices and photos of every
+   * line are read in one batch, so a cart costs the same number of queries
+   * whether it holds one line or twenty-five.
+   *
+   * A line whose product was archived or is no longer priced in the city is
+   * kept, marked unavailable and left out of the totals, so the visitor can
+   * set it to zero.
+   */
+  async function withDetails(locationId: string, lines: CartLine[]): Promise<CartItem[]> {
+    if (lines.length === 0) return [];
+
+    const productIds = lines.map((line) => line.productId);
+
+    const [productRows, priceRows, imageRows] = await db.batch([
+      db
+        .select({
+          id: products.id,
+          name: products.name,
+          slug: products.slug,
+          status: products.status,
+        })
+        .from(products)
+        .where(inArray(products.id, productIds)),
+      db
+        .select()
+        .from(productPrices)
+        .where(
+          and(
+            inArray(productPrices.productId, productIds),
+            eq(productPrices.locationId, locationId),
+          ),
+        ),
+      db
+        .select()
+        .from(productImages)
+        .where(inArray(productImages.productId, productIds))
+        .orderBy(asc(productImages.productId), asc(productImages.position)),
+    ]);
+
+    const productById = new Map(productRows.map((row) => [row.id, row]));
+    const priceOf = new Map(priceRows.map((row) => [row.productId, row]));
+    const imagesOf = groupBy(imageRows, (row) => row.productId);
+
+    return lines.flatMap(({ productId, quantity }) => {
+      const product = productById.get(productId);
+      if (!product) return [];
+
+      const price = priceOf.get(productId);
+
+      return [
+        {
+          productId,
+          name: product.name,
+          slug: product.slug,
+          images: (imagesOf.get(productId) ?? []).map((image) => ({
+            url: image.url,
+            alt: image.alt ?? undefined,
+          })),
+          quantity,
+          weeklyPrice: price?.weeklyPrice ?? 0,
+          deposit: price?.deposit ?? undefined,
+          available: product.status === "active" && price !== undefined,
+        },
+      ];
+    });
+  }
+
+  /**
+   * The visitor's cart in one city. The city and its lines are read together,
+   * then the catalog fills the lines in: two round trips, however many lines
+   * the cart holds. Nothing is written until the first item.
    */
   async function getCart(
     userId: string,
@@ -143,36 +151,44 @@ export function createCartService({ db }: CreateCartServiceOptions) {
   ): Promise<z.infer<(typeof getCartResult)["schema"]>> {
     const { success, failed } = getCartResult;
 
-    const rows = await db
-      .select({
-        location: {
-          id: locations.id,
-          currency: locations.currency,
-          deliveryFee: locations.deliveryFee,
-        },
-        item: cartItems,
-        product: { name: products.name, slug: products.slug, status: products.status },
-        price: productPrices,
-        image: { url: productImages.url, alt: productImages.alt },
-      })
-      .from(locations)
-      .leftJoin(carts, cartScope(userId, locationId))
-      .leftJoin(cartItems, eq(cartItems.cartId, carts.id))
-      .leftJoin(products, eq(products.id, cartItems.productId))
-      .leftJoin(
-        productPrices,
-        and(eq(productPrices.productId, products.id), eq(productPrices.locationId, locations.id)),
-      )
-      .leftJoin(productImages, eq(productImages.productId, products.id))
-      .where(eq(locations.id, locationId))
-      .orderBy(asc(products.name), asc(productImages.position))
+    const batch = await db
+      .batch([
+        db
+          .select({
+            id: locations.id,
+            currency: locations.currency,
+            deliveryFee: locations.deliveryFee,
+          })
+          .from(locations)
+          .where(eq(locations.id, locationId))
+          .limit(1),
+        db
+          .select({ productId: cartItems.productId, quantity: cartItems.quantity })
+          .from(cartItems)
+          .innerJoin(carts, eq(carts.id, cartItems.cartId))
+          .innerJoin(products, eq(products.id, cartItems.productId))
+          .where(cartScope(userId, locationId))
+          .orderBy(asc(products.name)),
+      ])
       .catch(() => null);
-    if (!rows) return failed("failed_to_load_cart", "Failed to load cart");
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
 
-    const [first] = rows;
-    if (!first) return failed("location_not_found", `Location ${locationId} not found`);
+    const [[location], lines] = batch;
+    if (!location) return failed("location_not_found", `Location ${locationId} not found`);
 
-    return success(toCart(first.location, rows));
+    const items = await withDetails(locationId, lines).catch(() => null);
+    if (!items) return failed("failed_to_load_cart", "Failed to load cart");
+
+    return success({
+      locationId: location.id,
+      currency: location.currency,
+      items,
+      summary: priceCart({
+        currency: location.currency,
+        deliveryFee: location.deliveryFee,
+        lines: items.filter((item) => item.available),
+      }),
+    });
   }
 
   /**
@@ -209,47 +225,53 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       return success();
     }
 
-    const rows = await db
-      .select({
-        status: locations.status,
-        product: { id: products.id },
-        price: productPrices,
-        item: cartItems,
-      })
-      .from(locations)
-      .leftJoin(
-        productPrices,
-        and(eq(productPrices.locationId, locations.id), eq(productPrices.productId, productId)),
-      )
-      .leftJoin(
-        products,
-        and(eq(products.id, productPrices.productId), eq(products.status, "active")),
-      )
-      .leftJoin(carts, scope)
-      .leftJoin(cartItems, eq(cartItems.cartId, carts.id))
-      .where(eq(locations.id, locationId))
+    const batch = await db
+      .batch([
+        db
+          .select({ status: locations.status })
+          .from(locations)
+          .where(eq(locations.id, locationId))
+          .limit(1),
+        db
+          .select({ price: productPrices })
+          .from(productPrices)
+          .innerJoin(products, eq(products.id, productPrices.productId))
+          .where(
+            and(
+              eq(productPrices.locationId, locationId),
+              eq(productPrices.productId, productId),
+              eq(products.status, "active"),
+            ),
+          )
+          .limit(1),
+        db
+          .select({ productId: cartItems.productId })
+          .from(cartItems)
+          .innerJoin(carts, eq(carts.id, cartItems.cartId))
+          .where(scope),
+      ])
       .catch(() => null);
-    if (!rows) return failed("failed_to_load_cart", "Failed to load cart");
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
 
-    const [first] = rows;
-    if (!first) return failed("location_not_found", `Location ${locationId} not found`);
-    if (first.status !== "active") {
+    const [[location], [offer], held] = batch;
+
+    if (!location) return failed("location_not_found", `Location ${locationId} not found`);
+    if (location.status !== "active") {
       return failed("location_not_available", `Location ${locationId} is not open yet`);
     }
-    if (!first.product || !first.price) {
+    if (!offer) {
       return failed(
         "product_not_available",
         `Product ${productId} is not available in ${locationId}`,
       );
     }
 
-    const held = rows.flatMap((row) => (row.item ? [row.item] : []));
     const line = held.find((item) => item.productId === productId);
 
-    if (first.price.stock !== null && quantity > first.price.stock) {
+    if (offer.price.stock !== null && quantity > offer.price.stock) {
       return failed(
         "product_out_of_stock",
-        `Only ${first.price.stock} of ${productId} available in ${locationId}`,
+        `Only ${offer.price.stock} of ${productId} available in ${locationId}`,
       );
     }
     if (!line && held.length >= maxLines) {

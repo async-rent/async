@@ -215,7 +215,7 @@ describe("getCart", () => {
     });
   });
 
-  it("reads in one round trip, however many lines the cart holds", async () => {
+  it("reads in two round trips, however many lines the cart holds", async () => {
     const context = setup();
 
     for (let index = 0; index < 10; index++) {
@@ -230,7 +230,7 @@ describe("getCart", () => {
     const before = context.roundTrips();
     await context.service.getCart(userId, "loc_bali");
 
-    expect(context.roundTrips() - before).toBe(1);
+    expect(context.roundTrips() - before).toBe(2);
   });
 });
 
