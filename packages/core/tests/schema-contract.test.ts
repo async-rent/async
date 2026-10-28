@@ -318,6 +318,39 @@ describe("carts table", () => {
       }),
     );
   });
+
+  it("names its visitor instead of a polymorphic owner", () => {
+    const columns = getTableConfig(carts).columns;
+
+    const userId = columns.find((column) => column.name === "user_id");
+
+    expect(userId?.notNull).toBe(true);
+    expect(columns.map((column) => column.name)).not.toContain("owner_type");
+    expect(columns.map((column) => column.name)).not.toContain("owner_id");
+    expect(columns.map((column) => column.name)).not.toContain("customer_id");
+  });
+
+  it("holds no money of its own, so no total can drift from the catalog", () => {
+    const columns = getTableConfig(carts).columns.map((column) => column.name);
+
+    expect(columns).not.toContain("currency");
+    expect(columns).not.toContain("weekly_subtotal");
+    expect(columns).not.toContain("deposit");
+    expect(columns).not.toContain("delivery_fee");
+    expect(columns).not.toContain("discount");
+    expect(columns).not.toContain("total_due_today");
+    expect(columns).not.toContain("recurring_weekly");
+  });
+
+  it("gives every visitor one cart per city", () => {
+    expect(indexesOf(carts)).toContainEqual(
+      expect.objectContaining({
+        name: "carts_user_location_unique",
+        unique: true,
+        columns: ["user_id", "location_id"],
+      }),
+    );
+  });
 });
 
 describe("cart items table", () => {
@@ -343,40 +376,34 @@ describe("cart items table", () => {
     );
   });
 
-  it("orders lines by position within the cart", () => {
+  it("holds one line per product, so the quantity is on the line", () => {
     expect(primaryKeysOf(cartItems)).toContainEqual(
       expect.objectContaining({
         name: "cart_items_pk",
-        columns: ["cart_id", "position"],
+        columns: ["cart_id", "product_id"],
       }),
     );
+
+    const columns = getTableConfig(cartItems).columns.map((column) => column.name);
+    expect(columns).not.toContain("position");
   });
 
-  it("rejects an invalid position, quantity, price or deposit", () => {
-    expectNumericCheck(
-      cartItems,
-      "cart_items_position_check",
-      columnRef("cart_items", "position"),
-      ">= 0",
-    );
+  it("snapshots nothing, so a cart always shows today's prices", () => {
+    const columns = getTableConfig(cartItems).columns.map((column) => column.name);
+
+    expect(columns).not.toContain("name");
+    expect(columns).not.toContain("slug");
+    expect(columns).not.toContain("image_url");
+    expect(columns).not.toContain("weekly_price");
+    expect(columns).not.toContain("deposit");
+  });
+
+  it("rejects an invalid quantity", () => {
     expectNumericCheck(
       cartItems,
       "cart_items_quantity_check",
       columnRef("cart_items", "quantity"),
       "> 0",
-    );
-    expectNumericCheck(
-      cartItems,
-      "cart_items_weekly_price_check",
-      columnRef("cart_items", "weekly_price"),
-      ">= 0",
-    );
-    expectNumericCheck(
-      cartItems,
-      "cart_items_deposit_check",
-      columnRef("cart_items", "deposit"),
-      ">= 0",
-      { nullable: true },
     );
   });
 });
@@ -517,36 +544,6 @@ describe("check constraints", () => {
     );
   });
 
-  it("pins the money checks of the carts table", () => {
-    expectCurrencyCheck(carts, "carts_currency_check", columnRef("carts", "currency"));
-    expectNumericCheck(
-      carts,
-      "carts_weekly_subtotal_check",
-      columnRef("carts", "weekly_subtotal"),
-      ">= 0",
-    );
-    expectNumericCheck(carts, "carts_deposit_check", columnRef("carts", "deposit"), ">= 0");
-    expectNumericCheck(
-      carts,
-      "carts_delivery_fee_check",
-      columnRef("carts", "delivery_fee"),
-      ">= 0",
-    );
-    expectNumericCheck(carts, "carts_discount_check", columnRef("carts", "discount"), ">= 0");
-    expectNumericCheck(
-      carts,
-      "carts_total_due_today_check",
-      columnRef("carts", "total_due_today"),
-      ">= 0",
-    );
-    expectNumericCheck(
-      carts,
-      "carts_recurring_weekly_check",
-      columnRef("carts", "recurring_weekly"),
-      ">= 0",
-    );
-  });
-
   it("pins the money checks of the rentals table", () => {
     expectCurrencyCheck(rentals, "rentals_currency_check", columnRef("rentals", "currency"));
     expectNumericCheck(
@@ -569,10 +566,14 @@ describe("check constraints", () => {
       columnRef("rentals", "total_due_today"),
       ">= 0",
     );
+  });
+
+  it("pins the money checks of the locations table", () => {
+    expectCurrencyCheck(locations, "locations_currency_check", columnRef("locations", "currency"));
     expectNumericCheck(
-      rentals,
-      "rentals_recurring_weekly_check",
-      columnRef("rentals", "recurring_weekly"),
+      locations,
+      "locations_delivery_fee_check",
+      columnRef("locations", "delivery_fee"),
       ">= 0",
     );
   });

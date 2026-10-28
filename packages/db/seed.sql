@@ -34,19 +34,23 @@
 -- `ON DELETE RESTRICT` foreign keys to locations.
 -- ---------------------------------------------------------------------------
 
-INSERT INTO locations (id, slug, name, country, timezone, description, status) VALUES
-  ('loc_bali',       'bali',       'Bali',       'Indonesia', 'Asia/Makassar',     'Canggu and Ubud workspaces a scooter ride from the beach.',        'active'),
-  ('loc_chiang_mai', 'chiang-mai', 'Chiang Mai', 'Thailand',  'Asia/Chiang_Mai',   'Nimman and Old City desks with mountain air and fast fiber.',      'active'),
-  ('loc_da_nang',    'da-nang',    'Da Nang',    'Vietnam',   'Asia/Ho_Chi_Minh',  'Beachside setups between the Han River and My Khe beach.',         'active'),
-  ('loc_lisbon',     'lisbon',     'Lisbon',     'Portugal',  'Europe/Lisbon',     'Alfama to Parque das Nações setups with Atlantic light.',          'active')
+-- The currency and the delivery fee belong to the city: every price in a city
+-- is in that city's currency, and an order pays delivery once.
+INSERT INTO locations (id, slug, name, country, timezone, description, currency, delivery_fee, status) VALUES
+  ('loc_bali',       'bali',       'Bali',       'Indonesia', 'Asia/Makassar',     'Canggu and Ubud workspaces a scooter ride from the beach.',        'USD', 1000, 'active'),
+  ('loc_chiang_mai', 'chiang-mai', 'Chiang Mai', 'Thailand',  'Asia/Chiang_Mai',   'Nimman and Old City desks with mountain air and fast fiber.',      'USD', 1000, 'active'),
+  ('loc_da_nang',    'da-nang',    'Da Nang',    'Vietnam',   'Asia/Ho_Chi_Minh',  'Beachside setups between the Han River and My Khe beach.',         'USD', 1000, 'active'),
+  ('loc_lisbon',     'lisbon',     'Lisbon',     'Portugal',  'Europe/Lisbon',     'Alfama to Parque das Nações setups with Atlantic light.',          'USD', 1500, 'active')
 ON CONFLICT (id) DO UPDATE SET
-  slug        = excluded.slug,
-  name        = excluded.name,
-  country     = excluded.country,
-  timezone    = excluded.timezone,
-  description = excluded.description,
-  status      = excluded.status,
-  updated_at  = unixepoch() * 1000;
+  slug         = excluded.slug,
+  name         = excluded.name,
+  country      = excluded.country,
+  timezone     = excluded.timezone,
+  description  = excluded.description,
+  currency     = excluded.currency,
+  delivery_fee = excluded.delivery_fee,
+  status       = excluded.status,
+  updated_at   = unixepoch() * 1000;
 
 -- ---------------------------------------------------------------------------
 -- Categories. Counts match the storefront design: 4 desks, 5 chairs,
@@ -413,21 +417,19 @@ WITH bases(product_id, weekly, deposit, stock) AS (
     ('prd_setup_focus',          1500, 25000, 2),
     ('prd_setup_studio',         2100, 35000, 2)
 ),
-cities(slug, factor, delivery) AS (
+cities(slug, factor) AS (
   VALUES
-    ('bali',       1.0, 1000),
-    ('chiang-mai', 0.9, 1000),
-    ('da-nang',    0.9, 1000),
-    ('lisbon',     1.1, 1500)
+    ('bali',       1.0),
+    ('chiang-mai', 0.9),
+    ('da-nang',    0.9),
+    ('lisbon',     1.1)
 )
-INSERT INTO product_prices (product_id, location_id, currency, weekly_price, deposit, delivery_fee, stock, created_at)
+INSERT INTO product_prices (product_id, location_id, weekly_price, deposit, stock, created_at)
 SELECT
   b.product_id,
   l.id,
-  'USD',
   CAST(ROUND(b.weekly * c.factor / 50.0) * 50 AS INTEGER),
   b.deposit,
-  c.delivery,
   b.stock,
   unixepoch() * 1000
 FROM bases b
@@ -435,9 +437,7 @@ CROSS JOIN cities c
 JOIN locations l ON l.slug = c.slug
 WHERE true
 ON CONFLICT (product_id, location_id) DO UPDATE SET
-  currency     = excluded.currency,
   weekly_price = excluded.weekly_price,
   deposit      = excluded.deposit,
-  delivery_fee = excluded.delivery_fee,
   stock        = excluded.stock,
   updated_at   = unixepoch() * 1000;

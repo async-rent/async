@@ -18,73 +18,75 @@ import {
 } from "@async-rent/db";
 import type { SQL } from "drizzle-orm";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
-import { DrizzleD1Database } from "drizzle-orm/d1";
+import type { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
-import type { Category, Location, Product, ProductSort } from "../types";
-import {
-  categorySchema,
-  locationSchema,
-  productPageSchema,
-  productSchema,
-  type ProductQuery,
-} from "../types";
-import { createResult } from "../utils";
+import type { Category, Location, Product, ProductQuery, ProductSort } from "../types";
+import { categorySchema, locationSchema, productPageSchema, productSchema } from "../types";
+import { createResult, groupBy } from "../utils";
 
 export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
 }
 
-/**
- * The fold SQLite applies on the SQL side of the search: `lower()` folds ASCII
- * letters only (D1 ships without ICU), so the token is folded the same way.
- * ASCII searches are case-insensitive; any other character must match the
- * stored case exactly.
- */
-function foldToken(token: string): string {
-  return token.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
-}
+/* -------------------------------------------------------------------------- */
+/* Filters                                                                    */
+/* -------------------------------------------------------------------------- */
 
-/**
- * Searches the text a customer can see: the product's own copy and the name of
- * the category it sits in, so "lighting" finds the lamps even though no lamp
- * calls itself a light in its name.
- */
-function searchTokenCondition(token: string): SQL {
-  const inText = (column: AnySQLiteColumn) => sql`instr(lower(${column}), ${token}) > 0`;
+/** True when the city has a price for the product, so it can be rented there. */
+const rentedIn = (locationId: string): SQL => sql`exists (
+  select 1 from ${productPrices}
+  where ${productPrices.productId} = ${products.id}
+    and ${productPrices.locationId} = ${locationId}
+)`;
 
-  return sql`(
-    ${inText(products.name)}
-    or ${inText(products.tagline)}
-    or ${inText(products.description)}
-    or exists (
-      select 1 from ${categories}
-      where ${categories.id} = ${products.categoryId}
-        and instr(lower(${categories.name}), ${token}) > 0
-    )
-  )`;
-}
-
-/** A product only appears in the catalog when it can be rented somewhere. */
-const pricedSomewhere = sql`exists (
+/** True when at least one city has a price for the product. */
+const rentedAnywhere: SQL = sql`exists (
   select 1 from ${productPrices}
   where ${productPrices.productId} = ${products.id}
 )`;
 
-function pricedIn(locationId: string): SQL {
-  return sql`exists (
-    select 1 from ${productPrices}
-    where ${productPrices.productId} = ${products.id}
-      and ${productPrices.locationId} = ${locationId}
-  )`;
+/**
+ * Splits a search into lowercase words. SQLite's `lower()` only handles ASCII
+ * (D1 has no ICU), so the words are lowercased the same way: ASCII letters
+ * match in any case, other letters must match exactly.
+ */
+function searchWords(q: string | undefined): string[] {
+  return (q ?? "")
+    .replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+    .split(/\s+/)
+    .filter((word) => word.length > 0);
 }
 
 /**
- * The price a sort compares. With a city selected that city's weekly price is
- * the one quoted to the visitor; without one, the product's cheapest city
- * stands in so the order is still stable.
+ * True when the word is in something a customer can see: the product's own
+ * text or its category name. So "lighting" finds lamps even when no lamp
+ * has "light" in its name.
  */
-function priceSort(locationId: string | undefined): SQL {
+function matchesWord(word: string): SQL {
+  const has = (column: AnySQLiteColumn) => sql`instr(lower(${column}), ${word}) > 0`;
+
+  return sql`(
+    ${has(products.name)}
+    or ${has(products.tagline)}
+    or ${has(products.description)}
+    or exists (
+      select 1 from ${categories}
+      where ${categories.id} = ${products.categoryId}
+        and ${has(categories.name)}
+    )
+  )`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sorting                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The weekly price to sort by. In a city, that city's price. Without a city,
+ * the lowest price anywhere.
+ */
+function sortPrice(locationId: string | undefined): SQL {
   if (locationId) {
     return sql`(
       select ${productPrices.weeklyPrice}
@@ -101,9 +103,10 @@ function priceSort(locationId: string | undefined): SQL {
   )`;
 }
 
-function orderFor(sort: ProductSort, locationId: string | undefined): SQL[] {
+/** Every order ends with name and id, so equal rows keep the same order. */
+function orderBy(sort: ProductSort, locationId: string | undefined): SQL[] {
   const byName = [asc(products.name), asc(products.id)];
-  const price = priceSort(locationId);
+  const price = sortPrice(locationId);
 
   switch (sort) {
     case "price_asc":
@@ -119,6 +122,10 @@ function orderFor(sort: ProductSort, locationId: string | undefined): SQL[] {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Mapping                                                                    */
+/* -------------------------------------------------------------------------- */
+
 function toLocation(row: LocationRow): Location {
   return {
     id: row.id,
@@ -127,6 +134,8 @@ function toLocation(row: LocationRow): Location {
     country: row.country,
     timezone: row.timezone,
     description: row.description ?? undefined,
+    currency: row.currency,
+    deliveryFee: row.deliveryFee,
     status: row.status,
   };
 }
@@ -149,7 +158,7 @@ interface ProductParts {
   prices: ProductPriceRow[];
 }
 
-/** Rebuilds the nested domain product from its row and child rows. */
+/** Builds the product from its row and the rows that belong to it. */
 function toProduct(row: ProductRow, parts: ProductParts): Product {
   return {
     id: row.id,
@@ -158,16 +167,11 @@ function toProduct(row: ProductRow, parts: ProductParts): Product {
     tagline: row.tagline,
     description: row.description,
     categoryId: parts.category.id,
-    images: parts.images.map((image) => ({
-      url: image.url,
-      alt: image.alt ?? undefined,
-    })),
+    images: parts.images.map((image) => ({ url: image.url, alt: image.alt ?? undefined })),
     prices: parts.prices.map((price) => ({
       locationId: price.locationId,
-      currency: price.currency,
       weeklyPrice: price.weeklyPrice,
       deposit: price.deposit ?? undefined,
-      deliveryFee: price.deliveryFee ?? undefined,
       stock: price.stock ?? undefined,
     })),
     highlights: parts.highlights.map((highlight) => highlight.value),
@@ -180,18 +184,9 @@ function toProduct(row: ProductRow, parts: ProductParts): Product {
   };
 }
 
-function groupByProductId<TRow extends { productId: string }>(rows: TRow[]): Map<string, TRow[]> {
-  const grouped = new Map<string, TRow[]>();
-
-  for (const row of rows) {
-    const siblings = grouped.get(row.productId);
-
-    if (siblings) siblings.push(row);
-    else grouped.set(row.productId, [row]);
-  }
-
-  return grouped;
-}
+/* -------------------------------------------------------------------------- */
+/* Service                                                                    */
+/* -------------------------------------------------------------------------- */
 
 export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   const searchProductsResult = createResult(
@@ -215,15 +210,14 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   );
 
   /**
-   * Loads the child rows for a batch of products in one round of queries, so a
-   * page of results costs a fixed number of statements instead of one per card.
-   * Each child-table statement binds one parameter per product id, so
-   * `pageSize`'s cap keeps the batch under D1's statement limits.
+   * Turns product rows into full products. The images, highlights, specs and
+   * prices of every product are read in one batch, so a page costs the same
+   * number of queries whether it has one product or fifty.
    *
-   * A row that cannot be shaped into a valid domain product is a data defect,
-   * not a read failure: it is dropped instead of failing the whole read.
+   * A product that does not fit the product schema is left out instead of
+   * failing the whole read.
    */
-  async function loadProducts(rows: ProductRow[]): Promise<Product[]> {
+  async function withDetails(rows: ProductRow[]): Promise<Product[]> {
     if (rows.length === 0) return [];
 
     const productIds = rows.map((row) => row.id);
@@ -253,49 +247,42 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
         .orderBy(asc(productPrices.productId), asc(productPrices.locationId)),
     ]);
 
-    const categoriesById = new Map(categoryRows.map((row) => [row.id, row]));
-    const imagesByProduct = groupByProductId(imageRows);
-    const highlightsByProduct = groupByProductId(highlightRows);
-    const specsByProduct = groupByProductId(specRows);
-    const pricesByProduct = groupByProductId(priceRows);
+    const categoryById = new Map(categoryRows.map((row) => [row.id, row]));
+    const imagesOf = groupBy(imageRows, (row) => row.productId);
+    const highlightsOf = groupBy(highlightRows, (row) => row.productId);
+    const specsOf = groupBy(specRows, (row) => row.productId);
+    const pricesOf = groupBy(priceRows, (row) => row.productId);
 
     return rows.flatMap((row) => {
-      const category = categoriesById.get(row.categoryId);
+      const category = categoryById.get(row.categoryId);
       if (!category) return [];
 
       const product = toProduct(row, {
         category,
-        images: imagesByProduct.get(row.id) ?? [],
-        highlights: highlightsByProduct.get(row.id) ?? [],
-        specs: specsByProduct.get(row.id) ?? [],
-        prices: pricesByProduct.get(row.id) ?? [],
+        images: imagesOf.get(row.id) ?? [],
+        highlights: highlightsOf.get(row.id) ?? [],
+        specs: specsOf.get(row.id) ?? [],
+        prices: pricesOf.get(row.id) ?? [],
       });
 
       return productSchema.safeParse(product).success ? [product] : [];
     });
   }
 
+  /** Only active products that some city rents, narrowed by the query. */
   async function searchProducts(
     query: ProductQuery,
   ): Promise<z.infer<(typeof searchProductsResult)["schema"]>> {
     const { success, failed } = searchProductsResult;
     const { q, categoryId, locationId, sort, page, pageSize } = query;
 
-    const conditions: SQL[] = [eq(products.status, "active"), pricedSomewhere];
-
-    if (categoryId) conditions.push(eq(products.categoryId, categoryId));
-    if (locationId) conditions.push(pricedIn(locationId));
-
-    if (q) {
-      const tokens = foldToken(q)
-        .split(/\s+/)
-        .filter((token) => token.length > 0);
-
-      for (const token of tokens) conditions.push(searchTokenCondition(token));
-    }
-
-    const where = and(...conditions);
-    const orderBy = orderFor(sort, locationId);
+    const where = and(
+      eq(products.status, "active"),
+      rentedAnywhere,
+      categoryId ? eq(products.categoryId, categoryId) : undefined,
+      locationId ? rentedIn(locationId) : undefined,
+      ...searchWords(q).map(matchesWord),
+    );
 
     const batch = await db
       .batch([
@@ -304,66 +291,59 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
           .select()
           .from(products)
           .where(where)
-          .orderBy(...orderBy)
+          .orderBy(...orderBy(sort, locationId))
           .limit(pageSize)
           .offset((page - 1) * pageSize),
       ])
       .catch(() => null);
     if (!batch) return failed("failed_to_search_products", "Failed to search products");
 
-    const [countRows, rows] = batch;
-    const total = countRows[0]?.total ?? 0;
+    const [[counted], rows] = batch;
+    const total = counted?.total ?? 0;
 
-    const items = await loadProducts(rows).catch(() => null);
+    const items = await withDetails(rows).catch(() => null);
     if (!items) return failed("failed_to_search_products", "Failed to search products");
 
-    return success({
-      items,
-      total,
-      hasMore: page * pageSize < total,
-    });
+    return success({ items, total, hasMore: page * pageSize < total });
   }
 
-  /** Looks up one visible product by id; agents and API callers hold ids. */
-  function getProductById(
-    productId: string,
-  ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
-    return loadProduct(eq(products.id, productId), productId);
-  }
-
-  /** Resolves a storefront route key; a product's `slug` is its URL-safe id. */
-  function getProductBySlug(slug: string): Promise<z.infer<(typeof getProductResult)["schema"]>> {
-    return loadProduct(eq(products.slug, slug), slug);
-  }
-
-  /**
-   * One visible product by a key. Archived products stay hidden, like on the
-   * list side, so a deep link to one is not a live catalog entry.
-   */
-  async function loadProduct(
+  /** One active product by a key. Archived products are hidden, as in search. */
+  async function findProduct(
     condition: SQL,
     key: string,
   ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
     const { success, failed } = getProductResult;
 
-    const productRows = await db
+    const rows = await db
       .select()
       .from(products)
       .where(and(condition, eq(products.status, "active")))
       .limit(1)
       .catch(() => null);
-    if (!productRows) return failed("failed_to_fetch_product", "Failed to fetch product");
+    if (!rows) return failed("failed_to_fetch_product", "Failed to fetch product");
 
-    const [row] = productRows;
+    const [row] = rows;
     if (!row) return failed("product_not_found", `Product ${key} not found`);
 
-    const loadedProducts = await loadProducts([row]).catch(() => null);
-    if (!loadedProducts) return failed("failed_to_fetch_product", "Failed to fetch product");
+    const found = await withDetails([row]).catch(() => null);
+    if (!found) return failed("failed_to_fetch_product", "Failed to fetch product");
 
-    const [product] = loadedProducts;
+    const [product] = found;
     if (!product) return failed("product_data_invalid", `Product ${key} has invalid data`);
 
     return success(product);
+  }
+
+  /** For agents and API callers, who hold ids. */
+  function getProductById(
+    productId: string,
+  ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
+    return findProduct(eq(products.id, productId), productId);
+  }
+
+  /** For storefront routes, where the slug is the URL-safe id. */
+  function getProductBySlug(slug: string): Promise<z.infer<(typeof getProductResult)["schema"]>> {
+    return findProduct(eq(products.slug, slug), slug);
   }
 
   async function listLocations(): Promise<z.infer<(typeof listLocationsResult)["schema"]>> {

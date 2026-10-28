@@ -4,7 +4,6 @@ import type {
   Cart,
   CartItem,
   Category,
-  CategoryRef,
   ChargeSummary,
   Contact,
   Location,
@@ -45,6 +44,8 @@ export function makeLocation(overrides: Partial<Location> = {}): Location {
     name: "Bali",
     country: "Indonesia",
     timezone: "Asia/Makassar",
+    currency: "USD",
+    deliveryFee: 1000,
     status: "active",
     ...overrides,
   };
@@ -60,19 +61,9 @@ export function makeCategory(overrides: Partial<Category> = {}): Category {
   };
 }
 
-export function makeCategoryRef(overrides: Partial<CategoryRef> = {}): CategoryRef {
-  return {
-    id: "cat_desks",
-    slug: "desks",
-    name: "Desks",
-    ...overrides,
-  };
-}
-
 export function makeProductPrice(overrides: Partial<ProductPrice> = {}): ProductPrice {
   return {
     locationId: makeLocation().id,
-    currency: "USD",
     weeklyPrice: 12000,
     ...overrides,
   };
@@ -85,7 +76,7 @@ export function makeProduct(overrides: Partial<Product> = {}): Product {
     name: "SmartDesk Pro",
     tagline: "A height-adjustable desk for any workspace.",
     description: "A long-form description used on the product page.",
-    category: makeCategoryRef(),
+    categoryId: "cat_desks",
     images: [makeImage()],
     prices: [makeProductPrice()],
     highlights: [],
@@ -107,7 +98,6 @@ export function makeChargeSummary(overrides: Partial<ChargeSummary> = {}): Charg
     deliveryFee: 0,
     discount: 0,
     totalDueToday: 12000,
-    recurringWeekly: 12000,
     ...overrides,
   };
 }
@@ -117,16 +107,18 @@ export function makeCartItem(overrides: Partial<CartItem> = {}): CartItem {
     productId: "prod_smartdesk-pro",
     name: "SmartDesk Pro",
     slug: "smartdesk-pro",
+    images: [],
     quantity: 1,
     weeklyPrice: 12000,
+    available: true,
     ...overrides,
   };
 }
 
 export function makeCart(overrides: Partial<Cart> = {}): Cart {
   return {
-    id: "cart_01",
     locationId: makeLocation().id,
+    currency: "USD",
     items: [makeCartItem()],
     summary: makeChargeSummary(),
     ...overrides,
