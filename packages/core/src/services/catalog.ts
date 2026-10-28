@@ -184,15 +184,6 @@ function toProduct(row: ProductRow, parts: ProductParts): Product {
   };
 }
 
-/** Groups rows by the product they belong to. */
-function byProduct<TRow extends { productId: string }>(rows: TRow[]): Map<string, TRow[]> {
-  return rows.reduce((groups, row) => {
-    groups.set(row.productId, [...(groups.get(row.productId) ?? []), row]);
-
-    return groups;
-  }, new Map<string, TRow[]>());
-}
-
 /* -------------------------------------------------------------------------- */
 /* Service                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -257,10 +248,10 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     ]);
 
     const categoryById = new Map(categoryRows.map((row) => [row.id, row]));
-    const imagesOf = byProduct(imageRows);
-    const highlightsOf = byProduct(highlightRows);
-    const specsOf = byProduct(specRows);
-    const pricesOf = byProduct(priceRows);
+    const imagesOf = Map.groupBy(imageRows, (row) => row.productId);
+    const highlightsOf = Map.groupBy(highlightRows, (row) => row.productId);
+    const specsOf = Map.groupBy(specRows, (row) => row.productId);
+    const pricesOf = Map.groupBy(priceRows, (row) => row.productId);
 
     return rows.flatMap((row) => {
       const category = categoryById.get(row.categoryId);
