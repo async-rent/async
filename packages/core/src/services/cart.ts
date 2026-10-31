@@ -30,28 +30,28 @@ export interface CreateCartServiceOptions {
 }
 
 export const getCartByIdInputSchema = z.object({
-  cartId: z.string(),
+  cartId: z.string().describe("Cart identifier."),
 });
 
 export type GetCartByIdInput = z.infer<typeof getCartByIdInputSchema>;
 
 export const getCartByUserAndLocationInputSchema = z.object({
-  userId: z.string(),
-  locationId: z.string(),
+  userId: z.string().describe("Signed-in user who owns the cart."),
+  locationId: z.string().describe("Location the cart is scoped to; prices come from here."),
 });
 
 export type GetCartByUserAndLocationInput = z.infer<typeof getCartByUserAndLocationInputSchema>;
 
 export const putItemInputSchema = z.object({
-  cartId: z.string(),
-  productId: z.string(),
+  cartId: z.string().describe("Cart identifier."),
+  productId: z.string().describe("Product to add to the cart."),
   quantity: cartLineQuantitySchema,
 });
 
 export type PutItemInput = z.infer<typeof putItemInputSchema>;
 
 export const clearCartInputSchema = z.object({
-  cartId: z.string(),
+  cartId: z.string().describe("Cart identifier."),
 });
 
 export type ClearCartInput = z.infer<typeof clearCartInputSchema>;

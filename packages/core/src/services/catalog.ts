@@ -29,13 +29,9 @@ export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
 }
 
-export const productSortSchema = z.enum([
-  "featured",
-  "price_asc",
-  "price_desc",
-  "name_asc",
-  "newest",
-]);
+export const productSortSchema = z
+  .enum(["featured", "price_asc", "price_desc", "name_asc", "newest"])
+  .describe("Result order; price sorts use the selected location when one is given.");
 
 export type ProductSort = z.infer<typeof productSortSchema>;
 
@@ -52,13 +48,22 @@ export const productQuerySchema = z.object({
           .split(/\s+/)
           .filter((token) => token.length > 0).length <= maxSearchTokens,
     )
-    .optional(),
-  categoryId: z.string().optional(),
-  locationId: z.string().optional(),
+    .optional()
+    .describe(
+      `Free-text search over name, tagline, description and category; every word must match (max ${maxSearchTokens} words).`,
+    ),
+  categoryId: z.string().optional().describe("Only return products in this category."),
+  locationId: z.string().optional().describe("Only return products rentable in this location."),
   sort: productSortSchema.default("featured"),
-  page: z.number().int().positive().max(100).default(1),
+  page: z.number().int().positive().max(100).default(1).describe("1-based page number."),
   // One bound parameter per product id; 48 stays under D1's 100-parameter statement limit.
-  pageSize: z.number().int().positive().max(48).default(12),
+  pageSize: z
+    .number()
+    .int()
+    .positive()
+    .max(48)
+    .default(12)
+    .describe("Number of products per page (max 48)."),
 });
 
 export type ProductQuery = z.infer<typeof productQuerySchema>;
@@ -70,13 +75,13 @@ export const productPageSchema = paginationSchema(productSchema);
 export type ProductPage = z.infer<typeof productPageSchema>;
 
 export const getProductByIdInputSchema = z.object({
-  productId: z.string(),
+  productId: z.string().describe("Product identifier."),
 });
 
 export type GetProductByIdInput = z.infer<typeof getProductByIdInputSchema>;
 
 export const getProductBySlugInputSchema = z.object({
-  slug: z.string(),
+  slug: z.string().describe("Product route slug, e.g. smartdesk-pro."),
 });
 
 export type GetProductBySlugInput = z.infer<typeof getProductBySlugInputSchema>;
