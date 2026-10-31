@@ -350,6 +350,99 @@ describe("createRental", () => {
     });
   });
 
+  it("records the cart owner so the owner filter matches", async () => {
+    const context = setup();
+    const rental = await placeRental(context);
+
+    expect(rental.userId).toBe(userId);
+  });
+
+  it("empties the cart so a second submit cannot create a duplicate rental", async () => {
+    const context = setup();
+    const cartId = await fillCart(context, "loc_bali", [{ productId: "prd_chair", quantity: 1 }]);
+
+    const first = rentalOf(await context.service.createRental({ cartId, ...checkoutDetails }));
+    expect(first.status).toBe("pending_payment");
+
+    // The cart was frozen onto the first rental and emptied in the same batch,
+    // so the same cart can no longer become a second billable rental.
+    await expect(
+      context.service.createRental({ cartId, ...checkoutDetails }),
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: "cart_is_empty" },
+    });
+  });
+
+  it("holds stock by decrementing it when the rental is frozen", async () => {
+    const context = setup();
+    const cartId = await fillCart(context, "loc_bali", [
+      { productId: "prd_smartdesk", quantity: 2 },
+    ]);
+
+    rentalOf(await context.service.createRental({ cartId, ...checkoutDetails }));
+
+    const [{ stock }] = context.sqlite
+      .prepare(
+        "SELECT stock FROM product_prices WHERE product_id = 'prd_smartdesk' AND location_id = 'loc_bali'",
+      )
+      .all() as Array<{ stock: number }>;
+    // Started at 3, two units reserved for the rental.
+    expect(stock).toBe(1);
+  });
+
+  it("refuses a line that sold out between the cart and the checkout", async () => {
+    const context = setup();
+    const cartId = await fillCart(context, "loc_bali", [
+      { productId: "prd_smartdesk", quantity: 2 },
+    ]);
+    // Stock drops behind the cart's back after the line was added.
+    context.sqlite.exec(
+      "UPDATE product_prices SET stock = 1 WHERE product_id = 'prd_smartdesk' AND location_id = 'loc_bali'",
+    );
+
+    await expect(
+      context.service.createRental({ cartId, ...checkoutDetails }),
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: "product_out_of_stock" },
+    });
+  });
+
+  it("refuses a period that ends before it starts", async () => {
+    const context = setup();
+    const cartId = await fillCart(context, "loc_bali", [{ productId: "prd_chair", quantity: 1 }]);
+
+    await expect(
+      context.service.createRental({
+        cartId,
+        ...checkoutDetails,
+        startDate: "2026-02-10",
+        endDate: "2026-02-01",
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: "invalid_rental_period" },
+    });
+  });
+
+  it("refuses a delivery scheduled after the rental starts", async () => {
+    const context = setup();
+    const cartId = await fillCart(context, "loc_bali", [{ productId: "prd_chair", quantity: 1 }]);
+
+    await expect(
+      context.service.createRental({
+        cartId,
+        ...checkoutDetails,
+        startDate: "2026-02-01",
+        deliveryDate: "2026-02-05",
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: "invalid_rental_period" },
+    });
+  });
+
   it("reports a failure instead of throwing", async () => {
     const context = setup();
     const cartId = await fillCart(context, "loc_bali", [{ productId: "prd_chair", quantity: 1 }]);
@@ -468,11 +561,11 @@ describe("listRentals", () => {
 
   it("filters by user", async () => {
     const context = setup();
+    // The rental records the cart owner, so the owner's filter matches it.
     const placed = await placeRental(context);
-    // The rental is placed without a user, so a user filter excludes it.
-    context.sqlite.exec(`UPDATE rentals SET user_id = 'user_01' WHERE id = '${placed.id}'`);
+    expect(placed.userId).toBe(userId);
 
-    const mine = await context.service.listRentals(listQuery({ userId: "user_01" }));
+    const mine = await context.service.listRentals(listQuery({ userId }));
     if (!mine.success) throw new Error("list failed");
     expect(mine.data.items.map((item) => item.id)).toEqual([placed.id]);
 

@@ -137,9 +137,15 @@ export function generateRentalNumber(
   now: Date = new Date(),
   random: () => number = Math.random,
 ): string {
-  const suffix = Array.from({ length: rentalNumberSuffixLength }, () =>
-    rentalNumberAlphabet.charAt(Math.floor(random() * rentalNumberAlphabet.length)),
-  ).join("");
+  const lastIndex = rentalNumberAlphabet.length - 1;
+  const suffix = Array.from({ length: rentalNumberSuffixLength }, () => {
+    // Clamp the index into range: an injected source returning exactly 1 would
+    // otherwise land one past the end and produce an empty character, yielding
+    // a short suffix that fails the pattern.
+    const index = Math.min(Math.floor(random() * rentalNumberAlphabet.length), lastIndex);
+
+    return rentalNumberAlphabet.charAt(index);
+  }).join("");
 
   return `AR-${now.getUTCFullYear()}-${suffix}`;
 }

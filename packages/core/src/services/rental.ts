@@ -9,7 +9,7 @@ import {
   rentals,
 } from "@async-rent/db";
 import type { NewRentalItemRow, RentalItemRow, RentalRow } from "@async-rent/db";
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
@@ -37,22 +37,48 @@ export interface CreateRentalServiceOptions {
 // retry a few times before giving up rather than trusting randomness blindly.
 const rentalNumberAttempts = 5;
 
-export const createRentalInputSchema = z.object({
-  cartId: z.string().describe("Cart to turn into a rental; its available items are frozen."),
-  contact: contactSchema.describe("Who to reach about the rental."),
-  address: addressSchema.describe("Where to deliver the gear."),
-  startDate: dateSchema.describe("First day of the rental period."),
-  endDate: dateSchema
-    .optional()
-    .describe("Last day of the rental period; open-ended when omitted."),
-  deliveryDate: dateSchema.optional().describe("Day the gear is dropped off."),
-  deliveryWindow: timeWindowSchema.optional().describe("Local time window for the delivery."),
-  termsAcceptedAt: z.iso
-    .datetime({ offset: true })
-    .optional()
-    .describe("When the customer accepted the rental terms."),
-  notes: z.string().optional().describe("Internal notes, not shown to the customer."),
-});
+/**
+ * Whether a caught insert error is a clash on the unique rental `number`.
+ *
+ * SQLite reports it as `UNIQUE constraint failed: rentals.number`. Only this
+ * one failure is worth retrying with a fresh number; any other error (a CHECK,
+ * a foreign key, a transient fault) must surface with its cause intact rather
+ * than be paid for five times behind a generic code.
+ */
+function isRentalNumberClash(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return /unique constraint failed:\s*rentals\.number/i.test(message);
+}
+
+export const createRentalInputSchema = z
+  .object({
+    cartId: z.string().describe("Cart to turn into a rental; its available items are frozen."),
+    contact: contactSchema.describe("Who to reach about the rental."),
+    address: addressSchema.describe("Where to deliver the gear."),
+    startDate: dateSchema.describe("First day of the rental period."),
+    endDate: dateSchema
+      .optional()
+      .describe("Last day of the rental period; open-ended when omitted."),
+    deliveryDate: dateSchema.optional().describe("Day the gear is dropped off."),
+    deliveryWindow: timeWindowSchema.optional().describe("Local time window for the delivery."),
+    termsAcceptedAt: z.iso
+      .datetime({ offset: true })
+      .optional()
+      .describe("When the customer accepted the rental terms."),
+    notes: z.string().optional().describe("Internal notes, not shown to the customer."),
+  })
+  // The cart carries no dates, so this input is the only gate on the period
+  // before it reaches billing and delivery scheduling: a period must not end
+  // before it starts, and the gear must not be dropped off after it starts.
+  .refine((input) => !input.endDate || input.endDate >= input.startDate, {
+    error: "endDate cannot be before startDate",
+    path: ["endDate"],
+  })
+  .refine((input) => !input.deliveryDate || input.deliveryDate <= input.startDate, {
+    error: "deliveryDate cannot be after startDate",
+    path: ["deliveryDate"],
+  });
 
 export type CreateRentalInput = z.infer<typeof createRentalInputSchema>;
 
@@ -99,8 +125,11 @@ const createRentalResult = createResult(
     "cart_not_found",
     "location_not_available",
     "cart_is_empty",
+    "invalid_rental_period",
+    "product_out_of_stock",
     "failed_to_load_cart",
     "failed_to_create_rental",
+    "rental_data_invalid",
   ]),
 );
 
@@ -127,6 +156,7 @@ const cancelRentalResult = createResult(
     "rental_not_cancellable",
     "failed_to_load_rental",
     "failed_to_save_rental",
+    "rental_data_invalid",
   ]),
 );
 
@@ -143,6 +173,8 @@ interface PricedLine {
   quantity: number;
   weeklyPrice: number;
   deposit: number | null;
+  /** Units the city has, or `null` when stock is not tracked for this line. */
+  stock: number | null;
 }
 
 export function createRentalService({ db }: CreateRentalServiceOptions) {
@@ -239,6 +271,7 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
         quantity: cartItems.quantity,
         weeklyPrice: productPrices.weeklyPrice,
         deposit: productPrices.deposit,
+        stock: productPrices.stock,
       })
       .from(cartItems)
       .innerJoin(carts, eq(carts.id, cartItems.cartId))
@@ -277,6 +310,7 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
         quantity: row.quantity,
         weeklyPrice: row.weeklyPrice,
         deposit: row.deposit ?? null,
+        stock: row.stock ?? null,
       };
     });
   }
@@ -284,8 +318,17 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
   async function createRental(input: CreateRentalInput): Promise<CreateRentalResult> {
     const { success, failed } = createRentalResult;
 
+    // Apps parse at the boundary, but the period rule is a hard invariant on
+    // the stored row, so re-check it here and surface a typed failure rather
+    // than trusting the caller or throwing a ZodError out of the service.
+    const parsed = createRentalInputSchema.safeParse(input);
+    if (!parsed.success) {
+      return failed("invalid_rental_period", parsed.error.issues[0]?.message ?? "Invalid rental");
+    }
+
     const loaded = await db
       .select({
+        userId: carts.userId,
         locationId: carts.locationId,
         currency: locations.currency,
         deliveryFee: locations.deliveryFee,
@@ -308,6 +351,18 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
     if (!lines) return failed("failed_to_load_cart", "Failed to load cart");
     if (lines.length === 0) {
       return failed("cart_is_empty", "A rental needs at least one available item");
+    }
+
+    // Re-check availability at the freeze, the same hard limit the cart service
+    // enforces when a line is added: gear can sell out between "add to cart" and
+    // "checkout", and a rental must never freeze more units than the city has.
+    // Stock is held for this rental by decrementing it in the same batch below.
+    const shortLine = lines.find((line) => line.stock != null && line.quantity > line.stock);
+    if (shortLine) {
+      return failed(
+        "product_out_of_stock",
+        `Only ${shortLine.stock} of ${shortLine.name} left in ${cart.locationId}`,
+      );
     }
 
     const summary = priceLines({
@@ -337,16 +392,25 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
       deposit: line.deposit,
     }));
 
-    // Insert the rental and its frozen lines as one transaction, retrying only
-    // the number — a clash on the unique `number` is the one expected failure.
+    // The lines that track stock; their units are held for this rental by
+    // decrementing `product_prices.stock` in the same batch as the write.
+    const stockedLines = lines.filter((line) => line.stock != null);
+
+    // Insert the rental and its frozen lines, empty the cart, and reserve stock
+    // as one transaction, retrying only the number — a clash on the unique
+    // `number` is the one expected failure. Emptying the cart in the same batch
+    // means a second submit finds an empty cart and is refused, so one cart can
+    // never become two billable rentals.
     for (let attempt = 0; attempt < rentalNumberAttempts; attempt++) {
       const number = generateRentalNumber(now);
 
-      const written = await db
+      const outcome = await db
         .batch([
           db.insert(rentals).values({
             id: rentalId,
             number,
+            userId: cart.userId,
+            cartId: input.cartId,
             contactName: input.contact.name,
             contactEmail: input.contact.email,
             contactWhatsapp: input.contact.whatsapp ?? null,
@@ -374,26 +438,48 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
             notes: input.notes ?? null,
           }),
           db.insert(rentalItems).values(itemRows),
+          db.delete(cartItems).where(eq(cartItems.cartId, input.cartId)),
+          ...stockedLines.map((line) =>
+            db
+              .update(productPrices)
+              .set({ stock: sql`${productPrices.stock} - ${line.quantity}` })
+              .where(
+                and(
+                  eq(productPrices.productId, line.productId),
+                  eq(productPrices.locationId, cart.locationId),
+                ),
+              ),
+          ),
         ])
-        .then(() => true)
-        .catch(() => false);
+        .then(() => ({ ok: true as const }))
+        .catch((error: unknown) => ({ ok: false as const, error }));
 
-      if (written) {
-        const read = await db
-          .batch([
-            db.select().from(rentals).where(eq(rentals.id, rentalId)).limit(1),
-            itemsOf(rentalId),
-          ])
-          .catch(() => null);
+      if (!outcome.ok) {
+        // Only a clash on the number is retried; any other failure is surfaced.
+        if (isRentalNumberClash(outcome.error)) continue;
 
-        const created = read?.[0]?.[0];
-        const savedItems = read?.[1];
-        if (!created || !savedItems) {
-          return failed("failed_to_create_rental", "Failed to create rental");
-        }
-
-        return success(toRental(created, savedItems));
+        return failed("failed_to_create_rental", "Failed to create rental");
       }
+
+      const read = await db
+        .batch([
+          db.select().from(rentals).where(eq(rentals.id, rentalId)).limit(1),
+          itemsOf(rentalId),
+        ])
+        .catch(() => null);
+
+      const created = read?.[0]?.[0];
+      const savedItems = read?.[1];
+      if (!created || !savedItems) {
+        return failed("failed_to_create_rental", "Failed to create rental");
+      }
+
+      const rental = toRental(created, savedItems);
+      if (!rentalSchema.safeParse(rental).success) {
+        return failed("rental_data_invalid", `Rental ${created.id} has invalid data`);
+      }
+
+      return success(rental);
     }
 
     return failed("failed_to_create_rental", "Failed to create rental");
@@ -535,7 +621,12 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
     const items = await itemsOf(cancelled.id).catch(() => null);
     if (!items) return failed("failed_to_load_rental", "Failed to load rental");
 
-    return success(toRental(cancelled, items));
+    const rental = toRental(cancelled, items);
+    if (!rentalSchema.safeParse(rental).success) {
+      return failed("rental_data_invalid", `Rental ${cancelled.id} has invalid data`);
+    }
+
+    return success(rental);
   }
 
   return {
