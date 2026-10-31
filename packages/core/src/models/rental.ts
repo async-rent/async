@@ -55,10 +55,41 @@ export const rentalItemSchema = z.object({
 
 export type RentalItem = z.infer<typeof rentalItemSchema>;
 
+/**
+ * Statuses a rental can still be cancelled from.
+ *
+ * A rental that has run its course (`completed`) or already stopped
+ * (`cancelled`) is terminal: cancelling it again is a no-op the service
+ * rejects rather than silently repeats.
+ */
+export const cancellableRentalStatusValues = ["pending_payment", "confirmed", "active"] as const;
+
+export const cancellableRentalStatusSchema = z
+  .enum(cancellableRentalStatusValues)
+  .describe("Statuses a rental can still be cancelled from.");
+
+export type CancellableRentalStatus = z.infer<typeof cancellableRentalStatusSchema>;
+
+export function isRentalCancellable(status: RentalStatus): boolean {
+  return cancellableRentalStatusSchema.safeParse(status).success;
+}
+
+/**
+ * A human-readable rental reference, e.g. `AR-2026-7KQ4M2`.
+ *
+ * `AR` marks it as an Async rental, the year groups orders by season, and a
+ * six-character suffix drawn from an unambiguous alphabet (no `0/O`, `1/I`)
+ * keeps it easy to read over the phone.
+ */
+export const rentalNumberSchema = z
+  .string()
+  .regex(/^AR-\d{4}-[A-HJ-NP-Z2-9]{6}$/)
+  .describe("Human-readable rental reference shown to the customer, e.g. AR-2026-7KQ4M2.");
+
 export const rentalSchema = z
   .object({
     id: z.string(),
-    number: z.string().describe("Human-readable rental reference shown to the customer."),
+    number: rentalNumberSchema,
     userId: z.string().optional().describe("Signed-in user who placed the rental, if any."),
     contact: contactSchema,
     address: addressSchema,
@@ -88,3 +119,33 @@ export const rentalSchema = z
   .extend(timestampsSchema.shape);
 
 export type Rental = z.infer<typeof rentalSchema>;
+
+/** The unambiguous alphabet a rental number's suffix is drawn from (no 0/O, 1/I). */
+const rentalNumberAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const rentalNumberSuffixLength = 6;
+
+/**
+ * A human-readable rental reference, e.g. `AR-2026-7KQ4M2`, matching
+ * `rentalNumberSchema`.
+ *
+ * The suffix is random, not sequential, so one rental never reveals how many
+ * came before it; the database's unique constraint is the final arbiter, and
+ * the service retries on the rare clash. `random` and `now` are injected so the
+ * function stays pure and the format can be asserted in a test.
+ */
+export function generateRentalNumber(
+  now: Date = new Date(),
+  random: () => number = Math.random,
+): string {
+  const lastIndex = rentalNumberAlphabet.length - 1;
+  const suffix = Array.from({ length: rentalNumberSuffixLength }, () => {
+    // Clamp the index into range: an injected source returning exactly 1 would
+    // otherwise land one past the end and produce an empty character, yielding
+    // a short suffix that fails the pattern.
+    const index = Math.min(Math.floor(random() * rentalNumberAlphabet.length), lastIndex);
+
+    return rentalNumberAlphabet.charAt(index);
+  }).join("");
+
+  return `AR-${now.getUTCFullYear()}-${suffix}`;
+}

@@ -48,6 +48,10 @@ export type FulfillmentStatusValue = (typeof fulfillmentStatusValues)[number];
  *
  * The city is stored as `locations.id`, the same key `product_prices` uses, so
  * every location reference in the schema points at a primary key.
+ *
+ * `cart_id` records the cart the rental was frozen from. It is nullable and
+ * carries no foreign key: a cart is emptied at checkout and may be deleted
+ * later, so this is an audit trail back to the origin, not a live edge.
  */
 export const rentals = sqliteTable(
   "rentals",
@@ -55,6 +59,7 @@ export const rentals = sqliteTable(
     id: text("id").primaryKey(),
     number: text("number").notNull().unique(),
     userId: text("user_id"),
+    cartId: text("cart_id"),
     contactName: text("contact_name").notNull(),
     contactEmail: text("contact_email").notNull(),
     contactWhatsapp: text("contact_whatsapp"),
