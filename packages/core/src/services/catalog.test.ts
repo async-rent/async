@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createTestDatabase, type TestDatabase } from "../../tests/database";
-import type { ProductQuery } from "../types";
-import { createCatalogService } from "./catalog";
+import { createCatalogService, type ProductQuery } from "./catalog";
 
 /** A fixed timestamp, so `createdAt` assertions never depend on the clock. */
 const createdAt = Date.UTC(2026, 0, 1);
@@ -477,7 +476,7 @@ describe("getProductById", () => {
   it("returns one product with its full details", async () => {
     const { service } = setup();
 
-    const result = await service.getProductById("prd_smartdesk");
+    const result = await service.getProductById({ productId: "prd_smartdesk" });
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data).toMatchObject({
@@ -497,7 +496,7 @@ describe("getProductById", () => {
   it("fails when the product does not exist", async () => {
     const { service } = setup();
 
-    await expect(service.getProductById("prd_missing")).resolves.toEqual({
+    await expect(service.getProductById({ productId: "prd_missing" })).resolves.toEqual({
       success: false,
       error: { code: "product_not_found", message: "Product prd_missing not found" },
     });
@@ -506,7 +505,7 @@ describe("getProductById", () => {
   it("does not serve archived products that search hides", async () => {
     const { service } = setup();
 
-    await expect(service.getProductById("prd_archived")).resolves.toEqual({
+    await expect(service.getProductById({ productId: "prd_archived" })).resolves.toEqual({
       success: false,
       error: { code: "product_not_found", message: "Product prd_archived not found" },
     });
@@ -522,7 +521,7 @@ describe("getProductById", () => {
     });
     const { service } = context;
 
-    await expect(service.getProductById("prd_imageless")).resolves.toEqual({
+    await expect(service.getProductById({ productId: "prd_imageless" })).resolves.toEqual({
       success: false,
       error: {
         code: "product_data_invalid",
@@ -535,7 +534,7 @@ describe("getProductById", () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.getProductById("prd_smartdesk")).resolves.toEqual({
+    await expect(service.getProductById({ productId: "prd_smartdesk" })).resolves.toEqual({
       success: false,
       error: { code: "failed_to_fetch_product", message: "Failed to fetch product" },
     });
@@ -546,7 +545,7 @@ describe("getProductBySlug", () => {
   it("resolves a route slug to the full product", async () => {
     const { service } = setup();
 
-    const result = await service.getProductBySlug("smartdesk-pro");
+    const result = await service.getProductBySlug({ slug: "smartdesk-pro" });
     if (!result.success) throw new Error(result.error.message);
 
     expect(result.data).toMatchObject({
@@ -561,13 +560,13 @@ describe("getProductBySlug", () => {
     const { service } = setup();
 
     // A slug that matches no product.
-    await expect(service.getProductBySlug("missing-desk")).resolves.toEqual({
+    await expect(service.getProductBySlug({ slug: "missing-desk" })).resolves.toEqual({
       success: false,
       error: { code: "product_not_found", message: "Product missing-desk not found" },
     });
 
     // An id is not a slug: prd_smartdesk's slug is smartdesk-pro.
-    await expect(service.getProductBySlug("prd_smartdesk")).resolves.toEqual({
+    await expect(service.getProductBySlug({ slug: "prd_smartdesk" })).resolves.toEqual({
       success: false,
       error: { code: "product_not_found", message: "Product prd_smartdesk not found" },
     });
@@ -576,7 +575,7 @@ describe("getProductBySlug", () => {
   it("does not serve archived products either, so a deep link to one is dead", async () => {
     const { service } = setup();
 
-    await expect(service.getProductBySlug("archived-desk")).resolves.toEqual({
+    await expect(service.getProductBySlug({ slug: "archived-desk" })).resolves.toEqual({
       success: false,
       error: { code: "product_not_found", message: "Product archived-desk not found" },
     });

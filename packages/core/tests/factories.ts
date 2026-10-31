@@ -12,8 +12,8 @@ import type {
   ProductPrice,
   Rental,
   RentalItem,
-} from "../src/types";
-import type { Image } from "../src/utils";
+} from "../src/models";
+import type { Image } from "../src/models";
 
 /**
  * Shared builders for valid domain objects.
@@ -117,6 +117,8 @@ export function makeCartItem(overrides: Partial<CartItem> = {}): CartItem {
 
 export function makeCart(overrides: Partial<Cart> = {}): Cart {
   return {
+    id: "cart_01",
+    userId: "user_01",
     locationId: makeLocation().id,
     currency: "USD",
     items: [makeCartItem()],

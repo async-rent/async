@@ -1,4 +1,3 @@
-import type { CartItemRow } from "@async-rent/db";
 import {
   cartItems,
   carts,
@@ -7,80 +6,151 @@ import {
   productPrices,
   products,
 } from "@async-rent/db";
-import type { SQL } from "drizzle-orm";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
-import type { CartItem } from "../types";
-import { cartSchema, priceCart } from "../types";
+import type { Cart, CartItem, CartLine, CartLineError } from "../models";
+import {
+  cartLineError,
+  cartLineErrorValues,
+  cartLineQuantitySchema,
+  cartQuantityError,
+  cartSchema,
+  isCartItemAvailable,
+  isLocationActive,
+  maxCartLineQuantity,
+  maxCartLines,
+  summarizeCart,
+} from "../models";
 import { createResult, groupBy } from "../utils";
 
 export interface CreateCartServiceOptions {
   db: DrizzleD1Database;
 }
 
-/** The most units of one product a cart can hold. */
-const maxQuantity = 30;
+export const getCartByIdInputSchema = z.object({
+  cartId: z.string(),
+});
 
-/** The most kinds of gear a cart can hold. */
-const maxLines = 25;
+export type GetCartByIdInput = z.infer<typeof getCartByIdInputSchema>;
 
-/** A visitor has one cart per city. */
-const cartScope = (userId: string, locationId: string): SQL =>
-  and(eq(carts.userId, userId), eq(carts.locationId, locationId))!;
+export const getCartByUserAndLocationInputSchema = z.object({
+  userId: z.string(),
+  locationId: z.string(),
+});
 
-/** A stored line: what is in the cart, before the catalog fills in the rest. */
-type CartLine = Pick<CartItemRow, "productId" | "quantity">;
+export type GetCartByUserAndLocationInput = z.infer<typeof getCartByUserAndLocationInputSchema>;
+
+export const putItemInputSchema = z.object({
+  cartId: z.string(),
+  productId: z.string(),
+  quantity: cartLineQuantitySchema,
+});
+
+export type PutItemInput = z.infer<typeof putItemInputSchema>;
+
+export const clearCartInputSchema = z.object({
+  cartId: z.string(),
+});
+
+export type ClearCartInput = z.infer<typeof clearCartInputSchema>;
+
+function lineErrorMessage(
+  error: CartLineError,
+  input: { productId: string; locationId: string; stock: number | null },
+): string {
+  if (error === "product_out_of_stock") {
+    return `Only ${input.stock} of ${input.productId} available in ${input.locationId}`;
+  }
+  if (error === "cart_is_full") {
+    return `A cart holds at most ${maxCartLines} kinds of gear`;
+  }
+
+  return `Quantity must be a whole number between 0 and ${maxCartLineQuantity}`;
+}
+
+const getCartByIdResult = createResult(
+  cartSchema,
+  z.enum(["cart_not_found", "failed_to_load_cart"]),
+);
+
+export const getCartByIdResultSchema = getCartByIdResult.schema;
+export type GetCartByIdResult = z.infer<typeof getCartByIdResultSchema>;
+
+const getCartByUserAndLocationResult = createResult(
+  cartSchema,
+  z.enum(["location_not_found", "failed_to_load_cart", "failed_to_save_cart"]),
+);
+
+export const getCartByUserAndLocationResultSchema = getCartByUserAndLocationResult.schema;
+export type GetCartByUserAndLocationResult = z.infer<typeof getCartByUserAndLocationResultSchema>;
+
+const putItemErrorValues = [
+  "cart_not_found",
+  "location_not_available",
+  "product_not_available",
+  ...cartLineErrorValues,
+  "failed_to_load_cart",
+  "failed_to_save_cart",
+] as const;
+
+const putItemResult = createResult(z.void(), z.enum(putItemErrorValues));
+
+export const putItemResultSchema = putItemResult.schema;
+export type PutItemResult = z.infer<typeof putItemResultSchema>;
+
+const clearCartResult = createResult(z.void(), z.enum(["failed_to_save_cart"]));
+
+export const clearCartResultSchema = clearCartResult.schema;
+export type ClearCartResult = z.infer<typeof clearCartResultSchema>;
 
 export function createCartService({ db }: CreateCartServiceOptions) {
-  const getCartResult = createResult(
-    cartSchema,
-    z.enum(["location_not_found", "failed_to_load_cart"]),
-  );
-
-  const putItemResult = createResult(
-    z.void(),
-    z.enum([
-      "location_not_found",
-      "location_not_available",
-      "product_not_available",
-      "product_out_of_stock",
-      "invalid_quantity",
-      "cart_is_full",
-      "failed_to_load_cart",
-      "failed_to_save_cart",
-    ]),
-  );
-
-  const saveCartResult = createResult(
-    z.void(),
-    z.enum(["failed_to_load_cart", "failed_to_save_cart"]),
-  );
-
-  /** The id of the cart a scope picks out, for statements that write its lines. */
-  const cartIdOf = (scope: SQL) => db.select({ id: carts.id }).from(carts).where(scope);
-
-  /** Makes sure the visitor has a cart in the city; a visitor that has one keeps it. */
-  const ensureCart = (userId: string, locationId: string) =>
+  const cartById = (cartId: string) =>
     db
-      .insert(carts)
-      .values({ id: uuid(), userId, locationId })
-      .onConflictDoUpdate({
-        target: [carts.userId, carts.locationId],
-        set: { updatedAt: new Date() },
-      });
+      .select({
+        id: carts.id,
+        userId: carts.userId,
+        locationId: carts.locationId,
+        currency: locations.currency,
+        deliveryFee: locations.deliveryFee,
+      })
+      .from(carts)
+      .innerJoin(locations, eq(locations.id, carts.locationId))
+      .where(eq(carts.id, cartId))
+      .limit(1);
 
-  /**
-   * Fills the stored lines in from the catalog: the name, the photos and the
-   * price the city charges today. The products, prices and photos of every
-   * line are read in one batch, so a cart costs the same number of queries
-   * whether it holds one line or twenty-five.
-   *
-   * A line whose product was archived or is no longer priced in the city is
-   * kept, marked unavailable and left out of the totals, so the visitor can
-   * set it to zero.
-   */
+  const cartByScope = ({ userId, locationId }: GetCartByUserAndLocationInput) =>
+    db
+      .select({
+        id: carts.id,
+        userId: carts.userId,
+        locationId: carts.locationId,
+        currency: locations.currency,
+        deliveryFee: locations.deliveryFee,
+      })
+      .from(carts)
+      .innerJoin(locations, eq(locations.id, carts.locationId))
+      .where(and(eq(carts.userId, userId), eq(carts.locationId, locationId)))
+      .limit(1);
+
+  const linesOf = (cartId: string) =>
+    db
+      .select({ productId: cartItems.productId, quantity: cartItems.quantity })
+      .from(cartItems)
+      .innerJoin(products, eq(products.id, cartItems.productId))
+      .where(eq(cartItems.cartId, cartId))
+      .orderBy(asc(products.name));
+
+  const linesByScope = ({ userId, locationId }: GetCartByUserAndLocationInput) =>
+    db
+      .select({ productId: cartItems.productId, quantity: cartItems.quantity })
+      .from(cartItems)
+      .innerJoin(carts, eq(carts.id, cartItems.cartId))
+      .innerJoin(products, eq(products.id, cartItems.productId))
+      .where(and(eq(carts.userId, userId), eq(carts.locationId, locationId)))
+      .orderBy(asc(products.name));
+
   async function withDetails(locationId: string, lines: CartLine[]): Promise<CartItem[]> {
     if (lines.length === 0) return [];
 
@@ -134,91 +204,125 @@ export function createCartService({ db }: CreateCartServiceOptions) {
           quantity,
           weeklyPrice: price?.weeklyPrice ?? 0,
           deposit: price?.deposit ?? undefined,
-          available: product.status === "active" && price !== undefined,
+          available: isCartItemAvailable(product.status, price !== undefined),
         },
       ];
     });
   }
 
-  /**
-   * The visitor's cart in one city. The city and its lines are read together,
-   * then the catalog fills the lines in: two round trips, however many lines
-   * the cart holds. Nothing is written until the first item.
-   */
-  async function getCart(
-    userId: string,
-    locationId: string,
-  ): Promise<z.infer<(typeof getCartResult)["schema"]>> {
-    const { success, failed } = getCartResult;
+  function toCart(
+    cart: {
+      id: string;
+      userId: string;
+      locationId: string;
+      currency: string;
+      deliveryFee: number;
+    },
+    items: CartItem[],
+  ): Cart {
+    return {
+      id: cart.id,
+      userId: cart.userId,
+      locationId: cart.locationId,
+      currency: cart.currency,
+      items,
+      summary: summarizeCart({
+        currency: cart.currency,
+        deliveryFee: cart.deliveryFee,
+        items,
+      }),
+    };
+  }
+
+  async function getCartById(input: GetCartByIdInput): Promise<GetCartByIdResult> {
+    const { success, failed } = getCartByIdResult;
+
+    const batch = await db.batch([cartById(input.cartId), linesOf(input.cartId)]).catch(() => null);
+    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+
+    const [[cart], lines] = batch;
+    if (!cart) return failed("cart_not_found", `Cart ${input.cartId} not found`);
+
+    const items = await withDetails(cart.locationId, lines).catch(() => null);
+    if (!items) return failed("failed_to_load_cart", "Failed to load cart");
+
+    return success(toCart(cart, items));
+  }
+
+  async function getCartByUserAndLocation(
+    input: GetCartByUserAndLocationInput,
+  ): Promise<GetCartByUserAndLocationResult> {
+    const { userId, locationId } = input;
+    const { success, failed } = getCartByUserAndLocationResult;
 
     const batch = await db
       .batch([
         db
-          .select({
-            id: locations.id,
-            currency: locations.currency,
-            deliveryFee: locations.deliveryFee,
-          })
+          .select({ currency: locations.currency, deliveryFee: locations.deliveryFee })
           .from(locations)
           .where(eq(locations.id, locationId))
           .limit(1),
-        db
-          .select({ productId: cartItems.productId, quantity: cartItems.quantity })
-          .from(cartItems)
-          .innerJoin(carts, eq(carts.id, cartItems.cartId))
-          .innerJoin(products, eq(products.id, cartItems.productId))
-          .where(cartScope(userId, locationId))
-          .orderBy(asc(products.name)),
+        cartByScope(input),
+        linesByScope(input),
       ])
       .catch(() => null);
     if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
 
-    const [[location], lines] = batch;
+    const [[location], [cart], lines] = batch;
     if (!location) return failed("location_not_found", `Location ${locationId} not found`);
 
-    const items = await withDetails(locationId, lines).catch(() => null);
-    if (!items) return failed("failed_to_load_cart", "Failed to load cart");
+    if (cart) {
+      const items = await withDetails(cart.locationId, lines).catch(() => null);
+      if (!items) return failed("failed_to_load_cart", "Failed to load cart");
+
+      return success(toCart(cart, items));
+    }
+
+    const created = await db
+      .insert(carts)
+      .values({ id: uuid(), userId, locationId })
+      .onConflictDoUpdate({
+        target: [carts.userId, carts.locationId],
+        set: { updatedAt: new Date() },
+      })
+      .returning({ id: carts.id })
+      .catch(() => null);
+    if (!created) return failed("failed_to_save_cart", "Failed to save cart");
+
+    const [createdCart] = created;
+    if (!createdCart) return failed("failed_to_save_cart", "Failed to save cart");
 
     return success({
-      locationId: location.id,
+      id: createdCart.id,
+      userId,
+      locationId,
       currency: location.currency,
-      items,
-      summary: priceCart({
+      items: [],
+      summary: summarizeCart({
         currency: location.currency,
         deliveryFee: location.deliveryFee,
-        lines: items.filter((item) => item.available),
+        items: [],
       }),
     });
   }
 
-  /**
-   * Puts a product in the cart at `quantity` units, replacing what the line
-   * held; zero takes the line out. The product has to be rentable in the city,
-   * and the cart may not hold more units of it than the city has left, nor
-   * more kinds of gear than `maxLines`.
-   */
-  async function putItem(
-    userId: string,
-    locationId: string,
-    productId: string,
-    quantity: number,
-  ): Promise<z.infer<(typeof putItemResult)["schema"]>> {
+  async function putItem(input: PutItemInput): Promise<PutItemResult> {
+    const { cartId, productId, quantity } = input;
     const { success, failed } = putItemResult;
 
-    if (!Number.isInteger(quantity) || quantity < 0 || quantity > maxQuantity) {
+    const quantityError = cartQuantityError(quantity);
+    if (quantityError) {
       return failed(
-        "invalid_quantity",
-        `Quantity must be a whole number between 0 and ${maxQuantity}`,
+        quantityError,
+        `Quantity must be a whole number between 0 and ${maxCartLineQuantity}`,
       );
     }
 
-    const scope = cartScope(userId, locationId);
-
-    // Setting a line to zero is the removal: nothing to price, nothing to write.
+    // Zero removes the line: nothing to price, nothing to write.
     if (quantity === 0) {
       const removed = await db
         .delete(cartItems)
-        .where(and(eq(cartItems.productId, productId), inArray(cartItems.cartId, cartIdOf(scope))))
+        .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)))
         .catch(() => null);
       if (!removed) return failed("failed_to_save_cart", "Failed to save cart");
 
@@ -228,84 +332,86 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     const batch = await db
       .batch([
         db
-          .select({ status: locations.status })
-          .from(locations)
-          .where(eq(locations.id, locationId))
+          .select({
+            id: carts.id,
+            locationId: carts.locationId,
+            status: locations.status,
+          })
+          .from(carts)
+          .innerJoin(locations, eq(locations.id, carts.locationId))
+          .where(eq(carts.id, cartId))
           .limit(1),
         db
           .select({ price: productPrices })
           .from(productPrices)
+          .innerJoin(carts, eq(carts.locationId, productPrices.locationId))
           .innerJoin(products, eq(products.id, productPrices.productId))
           .where(
             and(
-              eq(productPrices.locationId, locationId),
+              eq(carts.id, cartId),
               eq(productPrices.productId, productId),
               eq(products.status, "active"),
             ),
           )
           .limit(1),
         db
-          .select({ productId: cartItems.productId })
+          .select({ productId: cartItems.productId, quantity: cartItems.quantity })
           .from(cartItems)
-          .innerJoin(carts, eq(carts.id, cartItems.cartId))
-          .where(scope),
+          .where(eq(cartItems.cartId, cartId)),
       ])
       .catch(() => null);
     if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
 
-    const [[location], [offer], held] = batch;
+    const [[cart], [offer], held] = batch;
 
-    if (!location) return failed("location_not_found", `Location ${locationId} not found`);
-    if (location.status !== "active") {
-      return failed("location_not_available", `Location ${locationId} is not open yet`);
+    if (!cart) return failed("cart_not_found", `Cart ${cartId} not found`);
+    if (!isLocationActive(cart)) {
+      return failed("location_not_available", `Location ${cart.locationId} is not open yet`);
     }
     if (!offer) {
       return failed(
         "product_not_available",
-        `Product ${productId} is not available in ${locationId}`,
+        `Product ${productId} is not available in ${cart.locationId}`,
       );
     }
 
-    const line = held.find((item) => item.productId === productId);
+    const lineError = cartLineError({
+      lines: held,
+      productId,
+      quantity,
+      stock: offer.price.stock,
+    });
 
-    if (offer.price.stock !== null && quantity > offer.price.stock) {
+    if (lineError) {
       return failed(
-        "product_out_of_stock",
-        `Only ${offer.price.stock} of ${productId} available in ${locationId}`,
+        lineError,
+        lineErrorMessage(lineError, {
+          productId,
+          locationId: cart.locationId,
+          stock: offer.price.stock,
+        }),
       );
-    }
-    if (!line && held.length >= maxLines) {
-      return failed("cart_is_full", `A cart holds at most ${maxLines} kinds of gear`);
     }
 
     const saved = await db
-      .batch([
-        ensureCart(userId, locationId),
-        db
-          .insert(cartItems)
-          .values({ cartId: sql`(${cartIdOf(scope)})`, productId, quantity })
-          .onConflictDoUpdate({
-            target: [cartItems.cartId, cartItems.productId],
-            set: { quantity },
-          }),
-      ])
+      .insert(cartItems)
+      .values({ cartId, productId, quantity })
+      .onConflictDoUpdate({
+        target: [cartItems.cartId, cartItems.productId],
+        set: { quantity },
+      })
       .catch(() => null);
     if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
 
     return success();
   }
 
-  /** Empties the cart. */
-  async function clearCart(
-    userId: string,
-    locationId: string,
-  ): Promise<z.infer<(typeof saveCartResult)["schema"]>> {
-    const { success, failed } = saveCartResult;
-    const scope = cartScope(userId, locationId);
+  async function clearCart(input: ClearCartInput): Promise<ClearCartResult> {
+    const { success, failed } = clearCartResult;
 
     const cleared = await db
       .delete(cartItems)
-      .where(inArray(cartItems.cartId, cartIdOf(scope)))
+      .where(eq(cartItems.cartId, input.cartId))
       .catch(() => null);
     if (!cleared) return failed("failed_to_save_cart", "Failed to save cart");
 
@@ -313,7 +419,8 @@ export function createCartService({ db }: CreateCartServiceOptions) {
   }
 
   return {
-    getCart,
+    getCartById,
+    getCartByUserAndLocation,
     putItem,
     clearCart,
   };

@@ -18,7 +18,7 @@ import {
   paymentStatusSchema,
   productStatusSchema,
   rentalStatusSchema,
-} from "../src/types";
+} from "../src/models";
 
 /**
  * The database stores statuses as text columns with check constraints, because

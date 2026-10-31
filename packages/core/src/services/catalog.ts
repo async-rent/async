@@ -21,48 +21,116 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
-import type { Category, Location, Product, ProductQuery, ProductSort } from "../types";
-import { categorySchema, locationSchema, productPageSchema, productSchema } from "../types";
-import { createResult, groupBy } from "../utils";
+import type { Category, Location, Product } from "../models";
+import { categorySchema, locationSchema, productSchema } from "../models";
+import { createResult, groupBy, paginationSchema } from "../utils";
 
 export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Filters                                                                    */
-/* -------------------------------------------------------------------------- */
+export const productSortSchema = z.enum([
+  "featured",
+  "price_asc",
+  "price_desc",
+  "name_asc",
+  "newest",
+]);
 
-/** True when the city has a price for the product, so it can be rented there. */
+export type ProductSort = z.infer<typeof productSortSchema>;
+
+export const maxSearchTokens = 8;
+
+export const productQuerySchema = z.object({
+  q: z
+    .string()
+    .max(120)
+    .refine(
+      (q) =>
+        q
+          .trim()
+          .split(/\s+/)
+          .filter((token) => token.length > 0).length <= maxSearchTokens,
+    )
+    .optional(),
+  categoryId: z.string().optional(),
+  locationId: z.string().optional(),
+  sort: productSortSchema.default("featured"),
+  page: z.number().int().positive().max(100).default(1),
+  // One bound parameter per product id; 48 stays under D1's 100-parameter statement limit.
+  pageSize: z.number().int().positive().max(48).default(12),
+});
+
+export type ProductQuery = z.infer<typeof productQuerySchema>;
+
+export const searchProductsInputSchema = productQuerySchema;
+export type SearchProductsInput = z.infer<typeof searchProductsInputSchema>;
+
+export const productPageSchema = paginationSchema(productSchema);
+export type ProductPage = z.infer<typeof productPageSchema>;
+
+export const getProductByIdInputSchema = z.object({
+  productId: z.string(),
+});
+
+export type GetProductByIdInput = z.infer<typeof getProductByIdInputSchema>;
+
+export const getProductBySlugInputSchema = z.object({
+  slug: z.string(),
+});
+
+export type GetProductBySlugInput = z.infer<typeof getProductBySlugInputSchema>;
+
+const searchProductsResult = createResult(productPageSchema, z.enum(["failed_to_search_products"]));
+
+export const searchProductsResultSchema = searchProductsResult.schema;
+export type SearchProductsResult = z.infer<typeof searchProductsResultSchema>;
+
+const getProductResult = createResult(
+  productSchema,
+  z.enum(["product_not_found", "failed_to_fetch_product", "product_data_invalid"]),
+);
+
+export const getProductResultSchema = getProductResult.schema;
+export type GetProductResult = z.infer<typeof getProductResultSchema>;
+
+const listLocationsResult = createResult(
+  z.array(locationSchema),
+  z.enum(["failed_to_list_locations"]),
+);
+
+export const listLocationsResultSchema = listLocationsResult.schema;
+export type ListLocationsResult = z.infer<typeof listLocationsResultSchema>;
+
+const listCategoriesResult = createResult(
+  z.array(categorySchema),
+  z.enum(["failed_to_list_categories"]),
+);
+
+export const listCategoriesResultSchema = listCategoriesResult.schema;
+export type ListCategoriesResult = z.infer<typeof listCategoriesResultSchema>;
+
 const rentedIn = (locationId: string): SQL => sql`exists (
   select 1 from ${productPrices}
   where ${productPrices.productId} = ${products.id}
     and ${productPrices.locationId} = ${locationId}
 )`;
 
-/** True when at least one city has a price for the product. */
 const rentedAnywhere: SQL = sql`exists (
   select 1 from ${productPrices}
   where ${productPrices.productId} = ${products.id}
 )`;
 
-/**
- * Splits a search into lowercase words. SQLite's `lower()` only handles ASCII
- * (D1 has no ICU), so the words are lowercased the same way: ASCII letters
- * match in any case, other letters must match exactly.
- */
+// SQLite's lower() only handles ASCII (D1 has no ICU).
 function searchWords(q: string | undefined): string[] {
-  return (q ?? "")
+  if (!q) return [];
+
+  return q
     .replace(/[A-Z]/g, (letter) => letter.toLowerCase())
     .split(/\s+/)
     .filter((word) => word.length > 0);
 }
 
-/**
- * True when the word is in something a customer can see: the product's own
- * text or its category name. So "lighting" finds lamps even when no lamp
- * has "light" in its name.
- */
 function matchesWord(word: string): SQL {
   const has = (column: AnySQLiteColumn) => sql`instr(lower(${column}), ${word}) > 0`;
 
@@ -78,14 +146,6 @@ function matchesWord(word: string): SQL {
   )`;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Sorting                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The weekly price to sort by. In a city, that city's price. Without a city,
- * the lowest price anywhere.
- */
 function sortPrice(locationId: string | undefined): SQL {
   if (locationId) {
     return sql`(
@@ -103,7 +163,7 @@ function sortPrice(locationId: string | undefined): SQL {
   )`;
 }
 
-/** Every order ends with name and id, so equal rows keep the same order. */
+// Every order ends with name and id, so equal rows keep the same order.
 function orderBy(sort: ProductSort, locationId: string | undefined): SQL[] {
   const byName = [asc(products.name), asc(products.id)];
   const price = sortPrice(locationId);
@@ -121,10 +181,6 @@ function orderBy(sort: ProductSort, locationId: string | undefined): SQL[] {
       return [desc(products.featured), ...byName];
   }
 }
-
-/* -------------------------------------------------------------------------- */
-/* Mapping                                                                    */
-/* -------------------------------------------------------------------------- */
 
 function toLocation(row: LocationRow): Location {
   return {
@@ -158,7 +214,6 @@ interface ProductParts {
   prices: ProductPriceRow[];
 }
 
-/** Builds the product from its row and the rows that belong to it. */
 function toProduct(row: ProductRow, parts: ProductParts): Product {
   return {
     id: row.id,
@@ -184,39 +239,7 @@ function toProduct(row: ProductRow, parts: ProductParts): Product {
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/* Service                                                                    */
-/* -------------------------------------------------------------------------- */
-
 export function createCatalogService({ db }: CreateCatalogServiceOptions) {
-  const searchProductsResult = createResult(
-    productPageSchema,
-    z.enum(["failed_to_search_products"]),
-  );
-
-  const getProductResult = createResult(
-    productSchema,
-    z.enum(["product_not_found", "failed_to_fetch_product", "product_data_invalid"]),
-  );
-
-  const listLocationsResult = createResult(
-    z.array(locationSchema),
-    z.enum(["failed_to_list_locations"]),
-  );
-
-  const listCategoriesResult = createResult(
-    z.array(categorySchema),
-    z.enum(["failed_to_list_categories"]),
-  );
-
-  /**
-   * Turns product rows into full products. The images, highlights, specs and
-   * prices of every product are read in one batch, so a page costs the same
-   * number of queries whether it has one product or fifty.
-   *
-   * A product that does not fit the product schema is left out instead of
-   * failing the whole read.
-   */
   async function withDetails(rows: ProductRow[]): Promise<Product[]> {
     if (rows.length === 0) return [];
 
@@ -253,6 +276,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     const specsOf = groupBy(specRows, (row) => row.productId);
     const pricesOf = groupBy(priceRows, (row) => row.productId);
 
+    // A product that does not fit the schema is left out instead of failing the read.
     return rows.flatMap((row) => {
       const category = categoryById.get(row.categoryId);
       if (!category) return [];
@@ -269,12 +293,9 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     });
   }
 
-  /** Only active products that some city rents, narrowed by the query. */
-  async function searchProducts(
-    query: ProductQuery,
-  ): Promise<z.infer<(typeof searchProductsResult)["schema"]>> {
+  async function searchProducts(input: SearchProductsInput): Promise<SearchProductsResult> {
     const { success, failed } = searchProductsResult;
-    const { q, categoryId, locationId, sort, page, pageSize } = query;
+    const { q, categoryId, locationId, sort, page, pageSize } = input;
 
     const where = and(
       eq(products.status, "active"),
@@ -307,11 +328,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     return success({ items, total, hasMore: page * pageSize < total });
   }
 
-  /** One active product by a key. Archived products are hidden, as in search. */
-  async function findProduct(
-    condition: SQL,
-    key: string,
-  ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
+  async function findProduct(condition: SQL, key: string): Promise<GetProductResult> {
     const { success, failed } = getProductResult;
 
     const rows = await db
@@ -334,19 +351,15 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     return success(product);
   }
 
-  /** For agents and API callers, who hold ids. */
-  function getProductById(
-    productId: string,
-  ): Promise<z.infer<(typeof getProductResult)["schema"]>> {
-    return findProduct(eq(products.id, productId), productId);
+  function getProductById(input: GetProductByIdInput): Promise<GetProductResult> {
+    return findProduct(eq(products.id, input.productId), input.productId);
   }
 
-  /** For storefront routes, where the slug is the URL-safe id. */
-  function getProductBySlug(slug: string): Promise<z.infer<(typeof getProductResult)["schema"]>> {
-    return findProduct(eq(products.slug, slug), slug);
+  function getProductBySlug(input: GetProductBySlugInput): Promise<GetProductResult> {
+    return findProduct(eq(products.slug, input.slug), input.slug);
   }
 
-  async function listLocations(): Promise<z.infer<(typeof listLocationsResult)["schema"]>> {
+  async function listLocations(): Promise<ListLocationsResult> {
     const { success, failed } = listLocationsResult;
 
     const rows = await db
@@ -359,7 +372,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     return success(rows.map(toLocation));
   }
 
-  async function listCategories(): Promise<z.infer<(typeof listCategoriesResult)["schema"]>> {
+  async function listCategories(): Promise<ListCategoriesResult> {
     const { success, failed } = listCategoriesResult;
 
     const rows = await db

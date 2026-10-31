@@ -1,14 +1,6 @@
 import { z } from "zod";
-import { currencyCodeSchema, dateTimeSchema, timestampsSchema } from "../utils";
+import { currencyCodeSchema, dateTimeSchema, timestampsSchema } from "./shared";
 import { paymentProviderSchema } from "./payment";
-
-/**
- * The recurring schedule that bills a rental.
- *
- * Kept separate from a single charge: the agreement holds the cadence and the
- * next billing date, while each `Payment` records one settled weekly cycle.
- * Provider-neutral, same as payments.
- */
 
 export const billingIntervalSchema = z.enum(["weekly"]);
 
@@ -20,17 +12,14 @@ export type BillingAgreementStatus = z.infer<typeof billingAgreementStatusSchema
 
 export const billingAgreementSchema = z
   .object({
-    id: z.string().describe("Stable agreement id."),
+    id: z.string(),
     rentalId: z.string(),
     provider: paymentProviderSchema,
-    providerAgreementId: z
-      .string()
-      .optional()
-      .describe("Provider-side mandate id, once the agreement is set up."),
+    providerAgreementId: z.string().optional(),
     interval: billingIntervalSchema.default("weekly"),
-    currency: currencyCodeSchema.describe("Currency the recurring charges are billed in."),
+    currency: currencyCodeSchema,
     status: billingAgreementStatusSchema.default("active"),
-    nextChargeAt: dateTimeSchema.optional().describe("When the agreement next bills."),
+    nextChargeAt: dateTimeSchema.optional(),
     cancelledAt: dateTimeSchema.optional(),
   })
   .extend(timestampsSchema.shape);

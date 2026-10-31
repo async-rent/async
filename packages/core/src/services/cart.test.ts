@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createTestDatabase, type TestDatabase } from "../../tests/database";
-import type { Cart } from "../types";
+import type { Cart } from "../models";
 import { createCartService } from "./cart";
 
-/**
- * A fixed timestamp, so nothing in a fixture depends on the clock.
- */
 const createdAt = Date.UTC(2026, 0, 1);
 
 interface PriceFixture {
@@ -81,10 +78,6 @@ function insertProduct(database: TestDatabase, fixture: ProductFixture): void {
   }
 }
 
-/**
- * A small catalog: a desk and a chair in Bali, a chair in Lisbon, a lamp that
- * only Bali sells, and a product that is archived.
- */
 function seedCatalog(database: TestDatabase): void {
   seedCities(database);
 
@@ -131,35 +124,42 @@ function setup() {
 const userId = "user_01";
 const otherUserId = "user_02";
 
-/** Unwraps a cart result, so a test reads like the visitor's story. */
 function cartOf(result: { success: boolean; data?: Cart; error?: { message: string } }): Cart {
   if (!result.success || !result.data) throw new Error(result.error?.message);
 
   return result.data;
 }
 
-/** Runs a change, then reads the cart the visitor sees afterwards. */
-async function after(
+async function openCart(
   service: ReturnType<typeof createCartService>,
   userId: string,
   locationId: string,
+): Promise<Cart> {
+  return cartOf(await service.getCartByUserAndLocation({ userId, locationId }));
+}
+
+async function after(
+  service: ReturnType<typeof createCartService>,
+  cartId: string,
   change: Promise<{ success: boolean }>,
 ): Promise<Cart> {
   const result = await change;
   if (!result.success) throw new Error("the change failed");
 
-  return cartOf(await service.getCart(userId, locationId));
+  return cartOf(await service.getCartById({ cartId }));
 }
 
 const lines = (cart: Cart) => cart.items.map((item) => [item.productId, item.quantity]);
 
-describe("getCart", () => {
-  it("is empty before the first item, and writes nothing", async () => {
+describe("getCartByUserAndLocation", () => {
+  it("creates an empty cart on the first read", async () => {
     const { service, sqlite } = setup();
 
-    const cart = cartOf(await service.getCart(userId, "loc_bali"));
+    const cart = await openCart(service, userId, "loc_bali");
 
     expect(cart).toEqual({
+      id: expect.any(String),
+      userId,
       locationId: "loc_bali",
       currency: "USD",
       items: [],
@@ -172,34 +172,37 @@ describe("getCart", () => {
         totalDueToday: 0,
       },
     });
-    expect(sqlite.prepare("SELECT count(*) AS n FROM carts").get()).toEqual({ n: 0 });
+    expect(sqlite.prepare("SELECT count(*) AS n FROM carts").get()).toEqual({ n: 1 });
   });
 
   it("keeps a cart per city", async () => {
     const { service } = setup();
+    const bali = await openCart(service, userId, "loc_bali");
+    const lisbon = await openCart(service, userId, "loc_lisbon");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
-    await service.putItem(userId, "loc_lisbon", "prd_smartdesk", 1);
+    await service.putItem({ cartId: bali.id, productId: "prd_chair", quantity: 1 });
+    await service.putItem({ cartId: lisbon.id, productId: "prd_smartdesk", quantity: 1 });
 
-    expect(lines(cartOf(await service.getCart(userId, "loc_bali")))).toEqual([["prd_chair", 1]]);
-    expect(lines(cartOf(await service.getCart(userId, "loc_lisbon")))).toEqual([
-      ["prd_smartdesk", 1],
-    ]);
+    expect(lines(await openCart(service, userId, "loc_bali"))).toEqual([["prd_chair", 1]]);
+    expect(lines(await openCart(service, userId, "loc_lisbon"))).toEqual([["prd_smartdesk", 1]]);
   });
 
   it("keeps one visitor's cart apart from another's", async () => {
     const { service } = setup();
+    const mine = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
+    await service.putItem({ cartId: mine.id, productId: "prd_chair", quantity: 1 });
 
-    expect(cartOf(await service.getCart(otherUserId, "loc_bali")).items).toEqual([]);
-    expect(lines(cartOf(await service.getCart(userId, "loc_bali")))).toEqual([["prd_chair", 1]]);
+    expect((await openCart(service, otherUserId, "loc_bali")).items).toEqual([]);
+    expect(lines(await openCart(service, userId, "loc_bali"))).toEqual([["prd_chair", 1]]);
   });
 
   it("fails when the city does not exist", async () => {
     const { service } = setup();
 
-    await expect(service.getCart(userId, "loc_nowhere")).resolves.toEqual({
+    await expect(
+      service.getCartByUserAndLocation({ userId, locationId: "loc_nowhere" }),
+    ).resolves.toEqual({
       success: false,
       error: { code: "location_not_found", message: "Location loc_nowhere not found" },
     });
@@ -209,7 +212,9 @@ describe("getCart", () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.getCart(userId, "loc_bali")).resolves.toEqual({
+    await expect(
+      service.getCartByUserAndLocation({ userId, locationId: "loc_bali" }),
+    ).resolves.toEqual({
       success: false,
       error: { code: "failed_to_load_cart", message: "Failed to load cart" },
     });
@@ -217,6 +222,7 @@ describe("getCart", () => {
 
   it("reads in two round trips, however many lines the cart holds", async () => {
     const context = setup();
+    const cart = await openCart(context.service, userId, "loc_bali");
 
     for (let index = 0; index < 10; index++) {
       insertProduct(context, {
@@ -224,28 +230,66 @@ describe("getCart", () => {
         name: `Filler ${index}`,
         prices: [{ locationId: "loc_bali", weeklyPrice: 1000 }],
       });
-      await context.service.putItem(userId, "loc_bali", `prd_filler_${index}`, 1);
+      await context.service.putItem({
+        cartId: cart.id,
+        productId: `prd_filler_${index}`,
+        quantity: 1,
+      });
     }
 
     const before = context.roundTrips();
-    await context.service.getCart(userId, "loc_bali");
+    await context.service.getCartByUserAndLocation({ userId, locationId: "loc_bali" });
 
     expect(context.roundTrips() - before).toBe(2);
+  });
+});
+
+describe("getCartById", () => {
+  it("reads the cart it names", async () => {
+    const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
+
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 2 });
+
+    const read = cartOf(await service.getCartById({ cartId: cart.id }));
+
+    expect(read.id).toBe(cart.id);
+    expect(read.userId).toBe(userId);
+    expect(lines(read)).toEqual([["prd_chair", 2]]);
+  });
+
+  it("fails when the cart does not exist", async () => {
+    const { service } = setup();
+
+    await expect(service.getCartById({ cartId: "cart_missing" })).resolves.toEqual({
+      success: false,
+      error: { code: "cart_not_found", message: "Cart cart_missing not found" },
+    });
+  });
+
+  it("reports a failure instead of throwing", async () => {
+    const { service, sqlite } = setup();
+    sqlite.close();
+
+    await expect(service.getCartById({ cartId: "cart_any" })).resolves.toEqual({
+      success: false,
+      error: { code: "failed_to_load_cart", message: "Failed to load cart" },
+    });
   });
 });
 
 describe("putItem", () => {
   it("puts a product in the cart at the quantity asked for", async () => {
     const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    const cart = await after(
+    const updated = await after(
       service,
-      userId,
-      "loc_bali",
-      service.putItem(userId, "loc_bali", "prd_smartdesk", 2),
+      cart.id,
+      service.putItem({ cartId: cart.id, productId: "prd_smartdesk", quantity: 2 }),
     );
 
-    expect(cart.items).toEqual([
+    expect(updated.items).toEqual([
       {
         productId: "prd_smartdesk",
         name: "SmartDesk Pro",
@@ -257,7 +301,7 @@ describe("putItem", () => {
         available: true,
       },
     ]);
-    expect(cart.summary).toEqual({
+    expect(updated.summary).toEqual({
       currency: "USD",
       weeklySubtotal: 24000,
       deposit: 48000,
@@ -269,6 +313,7 @@ describe("putItem", () => {
 
   it("shows every photo of the product, in order", async () => {
     const context = setup();
+    const cart = await openCart(context.service, userId, "loc_bali");
 
     insertProduct(context, {
       id: "prd_monitor",
@@ -276,104 +321,133 @@ describe("putItem", () => {
       images: ["https://cdn.async.rent/a.jpg", "https://cdn.async.rent/b.jpg"],
       prices: [{ locationId: "loc_bali", weeklyPrice: 5000 }],
     });
-    await context.service.putItem(userId, "loc_bali", "prd_monitor", 1);
-    await context.service.putItem(userId, "loc_bali", "prd_chair", 1);
+    await context.service.putItem({
+      cartId: cart.id,
+      productId: "prd_monitor",
+      quantity: 1,
+    });
+    await context.service.putItem({
+      cartId: cart.id,
+      productId: "prd_chair",
+      quantity: 1,
+    });
 
-    const cart = cartOf(await context.service.getCart(userId, "loc_bali"));
+    const read = cartOf(await context.service.getCartById({ cartId: cart.id }));
 
-    expect(cart.items.map((item) => item.images.map((image) => image.url))).toEqual([
+    expect(read.items.map((item) => item.images.map((image) => image.url))).toEqual([
       ["https://cdn.async.rent/prd_chair-0.jpg"],
       ["https://cdn.async.rent/a.jpg", "https://cdn.async.rent/b.jpg"],
     ]);
-    expect(cart.items.map((item) => item.quantity)).toEqual([1, 1]);
+    expect(read.items.map((item) => item.quantity)).toEqual([1, 1]);
   });
 
   it("replaces the quantity of a line that is already there", async () => {
     const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 2);
-    const cart = await after(
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 2 });
+    const updated = await after(
       service,
-      userId,
-      "loc_bali",
-      service.putItem(userId, "loc_bali", "prd_chair", 5),
+      cart.id,
+      service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 5 }),
     );
 
-    expect(lines(cart)).toEqual([["prd_chair", 5]]);
+    expect(lines(updated)).toEqual([["prd_chair", 5]]);
   });
 
   it("takes the line out when the quantity is zero", async () => {
     const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 2);
-    const cart = await after(
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 2 });
+    const updated = await after(
       service,
-      userId,
-      "loc_bali",
-      service.putItem(userId, "loc_bali", "prd_chair", 0),
+      cart.id,
+      service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 0 }),
     );
 
-    expect(cart.items).toEqual([]);
+    expect(updated.items).toEqual([]);
   });
 
   it("changes nothing when taking out a product that is not in the cart", async () => {
     const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
-    const cart = await after(
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 1 });
+    const updated = await after(
       service,
-      userId,
-      "loc_bali",
-      service.putItem(userId, "loc_bali", "prd_lamp", 0),
+      cart.id,
+      service.putItem({ cartId: cart.id, productId: "prd_lamp", quantity: 0 }),
     );
 
-    expect(lines(cart)).toEqual([["prd_chair", 1]]);
+    expect(lines(updated)).toEqual([["prd_chair", 1]]);
   });
 
   it("charges delivery once for the order, not per line", async () => {
     const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
-    const cart = await after(
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 1 });
+    const updated = await after(
       service,
-      userId,
-      "loc_bali",
-      service.putItem(userId, "loc_bali", "prd_lamp", 1),
+      cart.id,
+      service.putItem({ cartId: cart.id, productId: "prd_lamp", quantity: 1 }),
     );
 
-    expect(cart.summary.deliveryFee).toBe(1000);
+    expect(updated.summary.deliveryFee).toBe(1000);
   });
 
   it("reads and writes in two round trips", async () => {
     const context = setup();
+    const cart = await openCart(context.service, userId, "loc_bali");
 
     const before = context.roundTrips();
-    await context.service.putItem(userId, "loc_bali", "prd_chair", 1);
+    await context.service.putItem({
+      cartId: cart.id,
+      productId: "prd_chair",
+      quantity: 1,
+    });
 
     expect(context.roundTrips() - before).toBe(2);
   });
 
   it("refuses a product the city does not rent", async () => {
     const { service } = setup();
+    const lisbon = await openCart(service, userId, "loc_lisbon");
+    const bali = await openCart(service, userId, "loc_bali");
 
-    await expect(service.putItem(userId, "loc_lisbon", "prd_chair", 1)).resolves.toMatchObject({
+    await expect(
+      service.putItem({ cartId: lisbon.id, productId: "prd_chair", quantity: 1 }),
+    ).resolves.toMatchObject({
       success: false,
       error: { code: "product_not_available" },
     });
-    await expect(service.putItem(userId, "loc_bali", "prd_archived", 1)).resolves.toMatchObject({
+    await expect(
+      service.putItem({ cartId: bali.id, productId: "prd_archived", quantity: 1 }),
+    ).resolves.toMatchObject({
       success: false,
       error: { code: "product_not_available" },
     });
   });
 
-  it("refuses a city that does not exist or is not open yet", async () => {
+  it("refuses a cart that does not exist", async () => {
     const { service } = setup();
 
-    await expect(service.putItem(userId, "loc_nowhere", "prd_chair", 1)).resolves.toMatchObject({
+    await expect(
+      service.putItem({ cartId: "cart_missing", productId: "prd_chair", quantity: 1 }),
+    ).resolves.toMatchObject({
       success: false,
-      error: { code: "location_not_found" },
+      error: { code: "cart_not_found" },
     });
-    await expect(service.putItem(userId, "loc_ko_tao", "prd_chair", 1)).resolves.toMatchObject({
+  });
+
+  it("refuses a city that is not open yet", async () => {
+    const { service } = setup();
+    const cart = await openCart(service, userId, "loc_ko_tao");
+
+    await expect(
+      service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 1 }),
+    ).resolves.toMatchObject({
       success: false,
       error: { code: "location_not_available" },
     });
@@ -381,15 +455,24 @@ describe("putItem", () => {
 
   it("refuses more units than the city has left", async () => {
     const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await expect(service.putItem(userId, "loc_bali", "prd_smartdesk", 4)).resolves.toMatchObject({
+    await expect(
+      service.putItem({ cartId: cart.id, productId: "prd_smartdesk", quantity: 4 }),
+    ).resolves.toMatchObject({
       success: false,
       error: { code: "product_out_of_stock" },
     });
 
-    await service.putItem(userId, "loc_bali", "prd_smartdesk", 2);
+    await service.putItem({
+      cartId: cart.id,
+      productId: "prd_smartdesk",
+      quantity: 2,
+    });
 
-    await expect(service.putItem(userId, "loc_bali", "prd_smartdesk", 4)).resolves.toMatchObject({
+    await expect(
+      service.putItem({ cartId: cart.id, productId: "prd_smartdesk", quantity: 4 }),
+    ).resolves.toMatchObject({
       success: false,
       error: { code: "product_out_of_stock" },
     });
@@ -397,16 +480,22 @@ describe("putItem", () => {
 
   it("refuses a quantity that is not a whole number of units", async () => {
     const { service } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
     for (const quantity of [-1, 1.5, 31, Number.NaN]) {
       await expect(
-        service.putItem(userId, "loc_bali", "prd_chair", quantity),
+        service.putItem({
+          cartId: cart.id,
+          productId: "prd_chair",
+          quantity: quantity,
+        }),
       ).resolves.toMatchObject({ success: false, error: { code: "invalid_quantity" } });
     }
   });
 
   it("refuses a new kind of gear once the cart is full", async () => {
     const context = setup();
+    const cart = await openCart(context.service, userId, "loc_bali");
 
     for (let index = 0; index < 25; index++) {
       insertProduct(context, {
@@ -414,26 +503,41 @@ describe("putItem", () => {
         name: `Filler ${index}`,
         prices: [{ locationId: "loc_bali", weeklyPrice: 1000 }],
       });
-      await context.service.putItem(userId, "loc_bali", `prd_filler_${index}`, 1);
+      await context.service.putItem({
+        cartId: cart.id,
+        productId: `prd_filler_${index}`,
+        quantity: 1,
+      });
     }
 
     await expect(
-      context.service.putItem(userId, "loc_bali", "prd_chair", 1),
+      context.service.putItem({
+        cartId: cart.id,
+        productId: "prd_chair",
+        quantity: 1,
+      }),
     ).resolves.toMatchObject({
       success: false,
       error: { code: "cart_is_full" },
     });
     // A product already in the cart is not a new kind of gear.
     await expect(
-      context.service.putItem(userId, "loc_bali", "prd_filler_0", 2),
+      context.service.putItem({
+        cartId: cart.id,
+        productId: "prd_filler_0",
+        quantity: 2,
+      }),
     ).resolves.toMatchObject({ success: true });
   });
 
   it("reports a failure instead of throwing", async () => {
     const { service, sqlite } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
     sqlite.close();
 
-    await expect(service.putItem(userId, "loc_bali", "prd_chair", 1)).resolves.toMatchObject({
+    await expect(
+      service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 1 }),
+    ).resolves.toMatchObject({
       success: false,
       error: { code: "failed_to_load_cart" },
     });
@@ -443,59 +547,75 @@ describe("putItem", () => {
 describe("clearCart", () => {
   it("empties the cart in that city only", async () => {
     const { service } = setup();
+    const bali = await openCart(service, userId, "loc_bali");
+    const lisbon = await openCart(service, userId, "loc_lisbon");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
-    await service.putItem(userId, "loc_lisbon", "prd_smartdesk", 1);
-    const cart = await after(service, userId, "loc_bali", service.clearCart(userId, "loc_bali"));
+    await service.putItem({ cartId: bali.id, productId: "prd_chair", quantity: 1 });
+    await service.putItem({
+      cartId: lisbon.id,
+      productId: "prd_smartdesk",
+      quantity: 1,
+    });
+    const cleared = await after(service, bali.id, service.clearCart({ cartId: bali.id }));
 
-    expect(cart.items).toEqual([]);
-    expect(lines(cartOf(await service.getCart(userId, "loc_lisbon")))).toEqual([
+    expect(cleared.items).toEqual([]);
+    expect(lines(cartOf(await service.getCartById({ cartId: lisbon.id })))).toEqual([
       ["prd_smartdesk", 1],
     ]);
+  });
+
+  it("succeeds for a cart that does not exist", async () => {
+    const { service } = setup();
+
+    await expect(service.clearCart({ cartId: "cart_missing" })).resolves.toEqual({
+      success: true,
+    });
   });
 });
 
 describe("a cart that outlives a catalog edit", () => {
   it("keeps a line the city no longer offers, but stops pricing it", async () => {
     const { service, sqlite } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 1 });
     sqlite.exec("DELETE FROM product_prices WHERE product_id = 'prd_chair'");
 
-    const cart = cartOf(await service.getCart(userId, "loc_bali"));
+    const read = cartOf(await service.getCartById({ cartId: cart.id }));
 
-    expect(cart.items).toMatchObject([
+    expect(read.items).toMatchObject([
       { productId: "prd_chair", weeklyPrice: 0, available: false },
     ]);
-    expect(cart.summary.weeklySubtotal).toBe(0);
-    expect(cart.summary.totalDueToday).toBe(0);
+    expect(read.summary.weeklySubtotal).toBe(0);
+    expect(read.summary.totalDueToday).toBe(0);
   });
 
   it("marks a line whose product was archived as unavailable", async () => {
     const { service, sqlite } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 1 });
     sqlite.exec("UPDATE products SET status = 'archived' WHERE id = 'prd_chair'");
 
-    const cart = cartOf(await service.getCart(userId, "loc_bali"));
+    const read = cartOf(await service.getCartById({ cartId: cart.id }));
 
-    expect(cart.items).toMatchObject([{ available: false }]);
-    expect(cart.summary.totalDueToday).toBe(0);
+    expect(read.items).toMatchObject([{ available: false }]);
+    expect(read.summary.totalDueToday).toBe(0);
   });
 
   it("lets the visitor take such a line out", async () => {
     const { service, sqlite } = setup();
+    const cart = await openCart(service, userId, "loc_bali");
 
-    await service.putItem(userId, "loc_bali", "prd_chair", 1);
+    await service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 1 });
     sqlite.exec("UPDATE products SET status = 'archived' WHERE id = 'prd_chair'");
 
-    const cart = await after(
+    const updated = await after(
       service,
-      userId,
-      "loc_bali",
-      service.putItem(userId, "loc_bali", "prd_chair", 0),
+      cart.id,
+      service.putItem({ cartId: cart.id, productId: "prd_chair", quantity: 0 }),
     );
 
-    expect(cart.items).toEqual([]);
+    expect(updated.items).toEqual([]);
   });
 });
