@@ -187,6 +187,17 @@ describe("createOrder", () => {
     expect(result).toMatchObject(failure("provider_unreachable", "PayPal could not be reached"));
   });
 
+  it("fails without throwing when fetch throws before returning a promise", async () => {
+    const fetch = vi.fn<PayPalFetch>(() => {
+      throw new TypeError("Invalid URL");
+    });
+    const adapter = createPayPalAdapter({ clientId: "client", clientSecret: "secret", fetch });
+
+    const result = await adapter.createOrder(order);
+
+    expect(result).toMatchObject(failure("provider_unreachable", "PayPal could not be reached"));
+  });
+
   it("talks to live PayPal only when asked to", async () => {
     const fetch = vi.fn<PayPalFetch>(async () => Response.json({}, { status: 500 }));
     const adapter = createPayPalAdapter({
@@ -201,6 +212,8 @@ describe("createOrder", () => {
     expect(fetch.mock.calls[0]?.[0]).toBe("https://api-m.paypal.com/v1/oauth2/token");
   });
 });
+
+const orderPath = "/v2/checkout/orders/ORDER1";
 
 describe("captureOrder", () => {
   const capturePath = "/v2/checkout/orders/ORDER1/capture";
@@ -276,15 +289,56 @@ describe("captureOrder", () => {
     );
   });
 
+  it("reads a pending capture again and collects it once it has completed", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: {
+        status: 201,
+        body: capturedOrder({ id: "CAPTURE1", status: "PENDING" }),
+      },
+      "/v2/payments/captures/CAPTURE1": { body: { id: "CAPTURE1", status: "COMPLETED" } },
+    });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toEqual({
+      success: true,
+      data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
+    });
+  });
+
+  it("reads the order when PayPal no longer replays an earlier capture", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: paypalError(422, "ORDER_ALREADY_CAPTURED"),
+      [orderPath]: { body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
+    });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toEqual({
+      success: true,
+      data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
+    });
+  });
+
   it("fails on a refusal that is not about the customer", async () => {
-    const paypal = stubPayPal({ [capturePath]: paypalError(422, "ORDER_ALREADY_CAPTURED") });
+    const paypal = stubPayPal({ [capturePath]: paypalError(422, "ORDER_EXPIRED") });
 
     const result = await paypal.adapter.captureOrder(capture);
 
     expect(result).toMatchObject({
-      ...failure("provider_refused", "[422 ORDER_ALREADY_CAPTURED]"),
-      error: { cause: { status: 422, issue: "ORDER_ALREADY_CAPTURED", debugId: "debug-1" } },
+      ...failure("provider_refused", "[422 ORDER_EXPIRED]"),
+      error: { cause: { status: 422, issue: "ORDER_EXPIRED", debugId: "debug-1" } },
     });
+  });
+
+  it("never reads a refused sign-in as a declined payment", async () => {
+    const paypal = stubPayPal({ "/v1/oauth2/token": paypalError(422, "INSTRUMENT_DECLINED") });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toMatchObject(
+      failure("provider_refused", "PayPal could not sign in [422 INSTRUMENT_DECLINED]"),
+    );
   });
 
   it("fails when PayPal fails", async () => {
@@ -294,6 +348,74 @@ describe("captureOrder", () => {
 
     expect(result).toMatchObject(
       failure("provider_refused", "PayPal could not capture the order [503]"),
+    );
+  });
+});
+
+describe("getOrder", () => {
+  const lookup = { externalOrderId: "ORDER1" };
+
+  it.each(["CREATED", "APPROVED", "PAYER_ACTION_REQUIRED", "VOIDED"])(
+    "reports a %s order as open, since no money has moved",
+    async (status) => {
+      const paypal = stubPayPal({ [orderPath]: { body: { id: "ORDER1", status } } });
+
+      const result = await paypal.adapter.getOrder(lookup);
+
+      expect(result).toEqual({ success: true, data: { status: "open" } });
+      expect(paypal.fetch.mock.calls.at(-1)?.[1].method).toBe("GET");
+    },
+  );
+
+  it("reports a captured order's payment", async () => {
+    const paypal = stubPayPal({
+      [orderPath]: { body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
+    });
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toEqual({
+      success: true,
+      data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
+    });
+  });
+
+  it("fails while the order's capture is still pending", async () => {
+    const paypal = stubPayPal({
+      [orderPath]: { body: capturedOrder({ id: "CAPTURE1", status: "PENDING" }) },
+      "/v2/payments/captures/CAPTURE1": { body: { id: "CAPTURE1", status: "PENDING" } },
+    });
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toMatchObject(failure("payment_pending", "PayPal capture CAPTURE1 is PENDING"));
+  });
+
+  it("fails on a completed order that shows no capture", async () => {
+    const paypal = stubPayPal({ [orderPath]: { body: { id: "ORDER1", status: "COMPLETED" } } });
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toMatchObject(
+      failure("provider_response_invalid", "PayPal order ORDER1 has no capture"),
+    );
+  });
+
+  it("reports an order PayPal dropped after it expired as open", async () => {
+    const paypal = stubPayPal({});
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toEqual({ success: true, data: { status: "open" } });
+  });
+
+  it("fails when PayPal cannot say where the order stands", async () => {
+    const paypal = stubPayPal({ [orderPath]: { status: 503 } });
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toMatchObject(
+      failure("provider_refused", "PayPal could not read the order [503]"),
     );
   });
 });
@@ -316,12 +438,39 @@ describe("refund", () => {
     expect(sent.headers.get("PayPal-Request-Id")).toBe("refund-CAPTURE1");
   });
 
-  it("accepts a refund PayPal is still processing", async () => {
+  it("fails while a refund is pending, so the payment stays paid until it settles", async () => {
+    const paypal = stubPayPal({
+      [refundPath]: {
+        status: 201,
+        body: { id: "REFUND1", status: "PENDING", status_details: { reason: "ECHECK" } },
+      },
+    });
+
+    const result = await paypal.adapter.refund(input);
+
+    expect(result).toMatchObject(
+      failure("payment_pending", "PayPal refund REFUND1 is PENDING (ECHECK)"),
+    );
+  });
+
+  it("reads a pending refund again and accepts it once it has completed", async () => {
     const paypal = stubPayPal({
       [refundPath]: { status: 201, body: { id: "REFUND1", status: "PENDING" } },
+      "/v2/payments/refunds/REFUND1": { body: { id: "REFUND1", status: "COMPLETED" } },
     });
 
     expect(await paypal.adapter.refund(input)).toEqual({ success: true });
+  });
+
+  it("fails when a pending refund turns out to have failed", async () => {
+    const paypal = stubPayPal({
+      [refundPath]: { status: 201, body: { id: "REFUND1", status: "PENDING" } },
+      "/v2/payments/refunds/REFUND1": { body: { id: "REFUND1", status: "FAILED" } },
+    });
+
+    const result = await paypal.adapter.refund(input);
+
+    expect(result).toMatchObject(failure("provider_refused", "PayPal refund REFUND1 is FAILED"));
   });
 
   it("treats a capture that is already fully refunded as done", async () => {

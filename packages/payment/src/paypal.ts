@@ -5,6 +5,8 @@ import {
   createProviderOrderInputSchema,
   createProviderOrderResult,
   createResult,
+  getProviderOrderInputSchema,
+  getProviderOrderResult,
   refundProviderPaymentInputSchema,
   refundProviderPaymentResult,
 } from "@async-rent/core";
@@ -13,6 +15,8 @@ import type {
   CaptureProviderOrderResult,
   CreateProviderOrderInput,
   CreateProviderOrderResult,
+  GetProviderOrderInput,
+  GetProviderOrderResult,
   PaymentProviderAdapter,
   ProviderErrorCode,
   RefundProviderPaymentInput,
@@ -130,8 +134,9 @@ const captureSchema = z.object({
 
 type Capture = z.infer<typeof captureSchema>;
 
-const capturedOrderSchema = z.object({
+const orderSchema = z.object({
   id: z.string(),
+  status: z.string().optional(),
   purchase_units: z
     .array(
       z.object({
@@ -146,6 +151,8 @@ const refundSchema = z.object({
   status: z.string(),
   status_details: statusDetailsSchema,
 });
+
+type Refund = z.infer<typeof refundSchema>;
 
 // Covers both shapes PayPal errors come in: REST (`name`, `details`) and
 // OAuth (`error`, `error_description`).
@@ -193,9 +200,10 @@ interface CallOptions {
  *
  * Every method returns a result and never throws. Capture and refund send an
  * idempotency key derived from the PayPal id, so a retried confirm or refund
- * replays PayPal's first answer instead of moving money twice. A capture that
- * comes back pending is read again by its id, so a later confirm sees it
- * settle. Every call fetches a fresh access token; nothing is cached.
+ * replays PayPal's first answer instead of moving money twice. A capture or
+ * refund that comes back pending is read again by its id, so a later call sees
+ * it settle, and a capture retried after PayPal forgot the key reads the order
+ * instead. Every call fetches a fresh access token; nothing is cached.
  */
 export function createPayPalAdapter(options: CreatePayPalAdapterOptions): PaymentProviderAdapter {
   const baseUrl = baseUrls[options.environment ?? "sandbox"];
@@ -283,22 +291,74 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
       requestId: `capture-${externalOrderId}`,
     });
 
+    // PayPal keeps idempotency keys for 6 hours, so a confirm retried after
+    // that is refused instead of replayed. The order still holds the capture.
+    const captureRefused = reply.kind === "refused" && !reply.step;
+    if (captureRefused && reply.failure.issue === "ORDER_ALREADY_CAPTURED") {
+      const order = await readOrder(externalOrderId);
+      if (!order.success) return order;
+      if (order.data.status === "open") {
+        return err("provider_response_invalid", `PayPal order ${externalOrderId} has no capture`);
+      }
+
+      return ok(order.data);
+    }
+
     // Only the capture itself can decline; a failed sign-in is never the customer's to fix.
-    const declined =
-      reply.kind === "refused" && !reply.step ? toDeclineReason(reply.failure) : undefined;
+    const declined = captureRefused ? toDeclineReason(reply.failure) : undefined;
     if (declined) return ok({ status: "failed", failureReason: declined });
     if (reply.kind !== "answered") return err(...toReplyError("capture the order", reply));
 
-    const order = capturedOrderSchema.safeParse(reply.body);
+    const order = orderSchema.safeParse(reply.body);
     if (!order.success) {
       return err("provider_response_invalid", "PayPal sent an unexpected capture", order.error);
     }
 
-    const [first] = order.data.purchase_units.flatMap((unit) => unit.payments?.captures ?? []);
+    const first = toFirstCapture(order.data);
     if (!first)
       return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
 
     return toCaptureResult(await readLatestCapture(first));
+  }
+
+  async function getOrder(input: GetProviderOrderInput): Promise<GetProviderOrderResult> {
+    const { err } = getProviderOrderResult;
+
+    const lookup = getProviderOrderInputSchema.safeParse(input);
+    if (!lookup.success) return err("invalid_request", "Invalid PayPal order", lookup.error);
+
+    return readOrder(lookup.data.externalOrderId);
+  }
+
+  /**
+   * Where an order stands at PayPal: open until it has a capture, then that
+   * capture's outcome, with a pending capture read fresh.
+   */
+  async function readOrder(externalOrderId: string): Promise<GetProviderOrderResult> {
+    const { ok, err } = getProviderOrderResult;
+
+    const reply = await call(`/v2/checkout/orders/${encodeURIComponent(externalOrderId)}`, {
+      method: "GET",
+    });
+    // PayPal drops an order that expired before anyone captured it.
+    if (reply.kind === "refused" && !reply.step && reply.failure.status === 404) {
+      return ok({ status: "open" });
+    }
+    if (reply.kind !== "answered") return err(...toReplyError("read the order", reply));
+
+    const order = orderSchema.safeParse(reply.body);
+    if (!order.success) {
+      return err("provider_response_invalid", "PayPal sent an unexpected order", order.error);
+    }
+
+    const first = toFirstCapture(order.data);
+    if (first) return toCaptureResult(await readLatestCapture(first));
+    // A completed order always carries its capture, so one without is not a shape we know.
+    if (order.data.status === "COMPLETED") {
+      return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
+    }
+
+    return ok({ status: "open" });
   }
 
   /**
@@ -345,18 +405,34 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
       return err("provider_response_invalid", "PayPal sent an unexpected refund", refunded.error);
     }
 
-    const { id, status, status_details } = refunded.data;
-    // A pending refund is accepted by PayPal and settles on its side.
-    if (status === "COMPLETED" || status === "PENDING") return ok();
+    const latest = await readLatestRefund(refunded.data);
+    const { id, status } = latest;
+    if (status === "COMPLETED") return ok();
 
-    return err(
-      "provider_refused",
-      `PayPal refund ${id} is ${status}${toReasonSuffix(status_details)}`,
-      refunded.data,
-    );
+    const reason = toReasonSuffix(latest.status_details);
+    // A pending refund can still fail (e.g. too little balance), so it is not
+    // done yet. A retry replays this refund and reads it again.
+    if (status === "PENDING")
+      return err("payment_pending", `PayPal refund ${id} is PENDING${reason}`);
+
+    return err("provider_refused", `PayPal refund ${id} is ${status}${reason}`, latest);
   }
 
-  return { createOrder, captureOrder, refund };
+  /** A pending refund read straight from PayPal; otherwise what the refund call said. */
+  async function readLatestRefund(refund: Refund): Promise<Refund> {
+    if (refund.status !== "PENDING") return refund;
+
+    const reply = await call(`/v2/payments/refunds/${encodeURIComponent(refund.id)}`, {
+      method: "GET",
+    });
+    if (reply.kind !== "answered") return refund;
+
+    const latest = refundSchema.safeParse(reply.body);
+
+    return latest.success && latest.data.id === refund.id ? latest.data : refund;
+  }
+
+  return { createOrder, captureOrder, getOrder, refund };
 }
 
 // Calls the global `fetch` unbound, which Workers require.
@@ -411,6 +487,13 @@ function toDeclineReason(failure: PayPalFailure): string | undefined {
   if (failure.status !== 422 || !failure.issue) return undefined;
 
   return declineReasons.get(failure.issue);
+}
+
+// The order's capture; an Async order has one purchase unit and captures it once. Pure.
+function toFirstCapture(order: z.infer<typeof orderSchema>): Capture | undefined {
+  const [first] = order.purchase_units.flatMap((unit) => unit.payments?.captures ?? []);
+
+  return first;
 }
 
 // Pure.

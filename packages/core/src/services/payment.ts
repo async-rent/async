@@ -26,6 +26,12 @@ export const captureProviderOrderInputSchema = z.object({
 
 export type CaptureProviderOrderInput = z.infer<typeof captureProviderOrderInputSchema>;
 
+export const getProviderOrderInputSchema = z.object({
+  externalOrderId: z.string().describe("Provider-side order to look up."),
+});
+
+export type GetProviderOrderInput = z.infer<typeof getProviderOrderInputSchema>;
+
 export const refundProviderPaymentInputSchema = z.object({
   externalPaymentId: z.string().describe("Provider-side payment to return."),
   amount: amountSchema.describe("Amount to return, in the currency's minor unit."),
@@ -43,7 +49,7 @@ export const providerErrorCodeSchema = z
     "payment_pending",
   ])
   .describe(
-    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, or it is still holding the money.",
+    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, or it has not settled the capture or refund yet.",
   );
 
 export type ProviderErrorCode = z.infer<typeof providerErrorCodeSchema>;
@@ -80,6 +86,23 @@ export const captureProviderOrderResult = createResult(
 
 export type CaptureProviderOrderResult = z.infer<typeof captureProviderOrderResult.schema>;
 
+export const providerOrderStateSchema = z.discriminatedUnion("status", [
+  z
+    .object({ status: z.literal("open") })
+    .describe("No money has moved: the order is unapproved, approved but not captured, or void."),
+  ...captureOutcomeSchema.options,
+]);
+
+export type ProviderOrderState = z.infer<typeof providerOrderStateSchema>;
+
+/** Result constructors for `PaymentProviderAdapter.getOrder`. */
+export const getProviderOrderResult = createResult(
+  providerOrderStateSchema,
+  providerErrorCodeSchema,
+);
+
+export type GetProviderOrderResult = z.infer<typeof getProviderOrderResult.schema>;
+
 /** Result constructors for `PaymentProviderAdapter.refund`. */
 export const refundProviderPaymentResult = createResult(z.void(), providerErrorCodeSchema);
 
@@ -94,14 +117,21 @@ export type RefundProviderPaymentResult = z.infer<typeof refundProviderPaymentRe
  *
  * An adapter never throws. A charge the provider declines is not an error
  * either: `captureOrder` succeeds with a `failed` outcome, which the service
- * records so the customer can try again.
+ * records so the customer can try again. Money the provider holds but has not
+ * settled fails with `payment_pending`, so the service leaves the row as is.
  */
 export interface PaymentProviderAdapter {
   /** Opens a charge at the provider and returns where the customer approves it. */
   createOrder(input: CreateProviderOrderInput): Promise<CreateProviderOrderResult>;
 
-  /** Takes the money once the customer has approved the order. */
+  /**
+   * Takes the money once the customer has approved the order. Capturing an
+   * order that was already captured returns that capture's outcome.
+   */
   captureOrder(input: CaptureProviderOrderInput): Promise<CaptureProviderOrderResult>;
+
+  /** Reads where an order stands without changing it, so a stale one is safe to replace. */
+  getOrder(input: GetProviderOrderInput): Promise<GetProviderOrderResult>;
 
   /** Returns a settled charge to the customer in full. */
   refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult>;
@@ -153,6 +183,7 @@ const startPaymentResult = createResult(
     "rental_not_found",
     "rental_not_payable",
     "payment_already_started",
+    "payment_pending",
     "provider_request_failed",
     "failed_to_load_rental",
     "failed_to_save_payment",
@@ -168,6 +199,7 @@ const confirmPaymentResult = createResult(
   z.enum([
     "provider_not_configured",
     "payment_not_found",
+    "payment_pending",
     "provider_request_failed",
     "failed_to_load_payment",
     "failed_to_save_payment",
@@ -183,6 +215,7 @@ const refundPaymentResult = createResult(
   z.enum([
     "payment_not_found",
     "payment_not_refundable",
+    "refund_pending",
     "provider_not_configured",
     "provider_request_failed",
     "failed_to_load_payment",
@@ -201,6 +234,14 @@ const listPaymentsResult = createResult(
 
 export const listPaymentsResultSchema = listPaymentsResult.schema;
 export type ListPaymentsResult = z.infer<typeof listPaymentsResultSchema>;
+
+// Recording a provider's outcome on a pending payment, shared by confirm and start.
+const settlePaymentResult = createResult(
+  paymentSchema,
+  z.enum(["failed_to_save_payment", "payment_data_invalid"]),
+);
+
+type SettlePaymentResult = z.infer<typeof settlePaymentResult.schema>;
 
 /** The first weekly cycle: the amount captured at checkout. */
 const firstBillingCycle = 1;
@@ -273,6 +314,37 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     }
     if (existing && !isRestartable(existing.status)) {
       return err("payment_already_started", `Rental ${rental.number} already has a payment`);
+    }
+
+    // A pending row's order may already hold or have taken the customer's
+    // money, e.g. a capture held for review or one whose reply was lost.
+    // Replacing that order would orphan the money and let the customer pay
+    // twice, so the provider is asked first.
+    if (existing?.status === "pending") {
+      const previousAdapter = providers[existing.provider];
+      if (!previousAdapter) {
+        return err("provider_not_configured", `Provider ${existing.provider} is not configured`);
+      }
+
+      const previous = await previousAdapter.getOrder({
+        externalOrderId: existing.externalOrderId,
+      });
+      if (!previous.success) {
+        return previous.error.code === "payment_pending"
+          ? err(
+              "payment_pending",
+              `Rental ${rental.number} has a payment the provider is still holding`,
+              previous.error,
+            )
+          : err("provider_request_failed", "The payment provider failed", previous.error);
+      }
+
+      if (previous.data.status === "succeeded") {
+        const settled = await settle(existing, previous.data);
+        if (!settled.success) return settled;
+
+        return err("payment_already_started", `Rental ${rental.number} is already paid`);
+      }
     }
 
     const order = await adapter.createOrder({
@@ -363,14 +435,26 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
 
     const captured = await adapter.captureOrder({ externalOrderId: row.externalOrderId });
     if (!captured.success) {
-      return err("provider_request_failed", "The payment provider failed", captured.error);
+      // Held money is not a provider fault: the payment stays pending and a
+      // later confirm settles it.
+      return captured.error.code === "payment_pending"
+        ? err("payment_pending", `Payment ${row.id} is on hold at the provider`, captured.error)
+        : err("provider_request_failed", "The payment provider failed", captured.error);
     }
 
-    const outcome = captured.data;
+    return settle(row, captured.data);
+  }
+
+  /**
+   * Records a provider's outcome on a pending payment. The payment and its
+   * rental move together: a captured payment confirms the rental, and either
+   * outcome is copied onto it to avoid a join.
+   */
+  async function settle(row: PaymentRow, outcome: CaptureOutcome): Promise<SettlePaymentResult> {
+    const { ok, err } = settlePaymentResult;
+
     const now = new Date();
 
-    // The payment and its rental move together: a captured payment confirms the
-    // rental, and either outcome is copied onto it to avoid a join.
     const saved = await attempt(
       db.batch([
         db
@@ -435,7 +519,11 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       currency: row.currency,
     });
     if (!refunded.success) {
-      return err("provider_request_failed", "The payment provider failed", refunded.error);
+      // A refund the provider has not settled leaves the payment paid; asking
+      // again reads where it stands without refunding twice.
+      return refunded.error.code === "payment_pending"
+        ? err("refund_pending", `Refund of payment ${row.id} is still processing`, refunded.error)
+        : err("provider_request_failed", "The payment provider failed", refunded.error);
     }
 
     const now = new Date();

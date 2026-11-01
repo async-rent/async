@@ -4,6 +4,7 @@ import {
   captureProviderOrderResult,
   createPaymentService,
   createProviderOrderResult,
+  getProviderOrderResult,
   refundProviderPaymentResult,
 } from "./payment";
 import type { PaymentProviderAdapter } from "./payment";
@@ -41,13 +42,17 @@ function setup() {
       externalPaymentId: `capture_${externalOrderId}`,
     }),
   );
+  // By default the earlier order was abandoned, so nothing was captured.
+  const getOrder = vi.fn<PaymentProviderAdapter["getOrder"]>(async () =>
+    getProviderOrderResult.ok({ status: "open" }),
+  );
   const refund = vi.fn<PaymentProviderAdapter["refund"]>(async () =>
     refundProviderPaymentResult.ok(),
   );
 
   const service = createPaymentService({
     db: database.db,
-    providers: { paypal: { createOrder, captureOrder, refund } },
+    providers: { paypal: { createOrder, captureOrder, getOrder, refund } },
   });
 
   const rentalRow = (id: string) =>
@@ -58,7 +63,22 @@ function setup() {
   const paymentCount = () =>
     database.sqlite.prepare("select count(*) as total from payments").get();
 
-  return { ...database, service, createOrder, captureOrder, refund, rentalRow, paymentCount };
+  const paymentRow = () =>
+    database.sqlite
+      .prepare("select external_order_id as externalOrderId, status from payments")
+      .get();
+
+  return {
+    ...database,
+    service,
+    createOrder,
+    captureOrder,
+    getOrder,
+    refund,
+    rentalRow,
+    paymentCount,
+    paymentRow,
+  };
 }
 
 type Setup = ReturnType<typeof setup>;
@@ -183,7 +203,63 @@ describe("startPayment", () => {
       success: true,
       data: { payment: { externalOrderId: "order_2", status: "pending" } },
     });
+    expect(s.getOrder).toHaveBeenCalledWith({ externalOrderId: "order_1" });
     expect(s.paymentCount()).toEqual({ total: 1 });
+  });
+
+  it("keeps the first order while the provider holds its payment, so it is never paid twice", async () => {
+    const s = setup();
+    await start(s);
+    s.getOrder.mockResolvedValueOnce(
+      getProviderOrderResult.err("payment_pending", "capture held for review"),
+    );
+
+    const result = await s.service.startPayment({
+      rentalId: "rental_1",
+      provider: "paypal",
+      ...urls,
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: "payment_pending" } });
+    expect(s.createOrder).toHaveBeenCalledTimes(1);
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "pending" });
+  });
+
+  it("records the first order's payment instead of opening a second one", async () => {
+    const s = setup();
+    await start(s);
+    s.getOrder.mockResolvedValueOnce(
+      getProviderOrderResult.ok({ status: "succeeded", externalPaymentId: "capture_order_1" }),
+    );
+
+    const result = await s.service.startPayment({
+      rentalId: "rental_1",
+      provider: "paypal",
+      ...urls,
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: "payment_already_started" } });
+    expect(s.createOrder).toHaveBeenCalledTimes(1);
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "succeeded" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
+  it("keeps the first order when the provider cannot say where it stands", async () => {
+    const s = setup();
+    await start(s);
+    s.getOrder.mockResolvedValueOnce(
+      getProviderOrderResult.err("provider_unreachable", "provider down"),
+    );
+
+    const result = await s.service.startPayment({
+      rentalId: "rental_1",
+      provider: "paypal",
+      ...urls,
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: "provider_request_failed" } });
+    expect(s.createOrder).toHaveBeenCalledTimes(1);
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "pending" });
   });
 
   it("refuses to start again once the payment is settled", async () => {
@@ -256,6 +332,22 @@ describe("confirmPayment", () => {
       success: true,
       data: { payment: { status: "pending", failureReason: undefined } },
     });
+    // A recorded decline took no money, so there is nothing to ask the provider.
+    expect(s.getOrder).not.toHaveBeenCalled();
+  });
+
+  it("keeps the payment pending while the provider holds the money", async () => {
+    const s = setup();
+    const externalOrderId = await start(s);
+    s.captureOrder.mockResolvedValueOnce(
+      captureProviderOrderResult.err("payment_pending", "capture held for review"),
+    );
+
+    const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(result).toMatchObject({ success: false, error: { code: "payment_pending" } });
+    expect(s.paymentRow()).toEqual({ externalOrderId, status: "pending" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "pending_payment", paymentStatus: null });
   });
 
   it("returns the settled payment on a replayed callback without capturing again", async () => {
@@ -358,6 +450,20 @@ describe("refundPayment", () => {
 
     expect(result).toMatchObject({ success: false, error: { code: "provider_request_failed" } });
     expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
+  it("keeps the payment paid while the provider is still processing the refund", async () => {
+    const s = setup();
+    const paymentId = await pay(s);
+    s.refund.mockResolvedValueOnce(
+      refundProviderPaymentResult.err("payment_pending", "refund pending"),
+    );
+
+    const result = await s.service.refundPayment({ paymentId });
+    const retry = await s.service.refundPayment({ paymentId });
+
+    expect(result).toMatchObject({ success: false, error: { code: "refund_pending" } });
+    expect(retry).toMatchObject({ success: true, data: { status: "refunded" } });
   });
 });
 
