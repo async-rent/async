@@ -30,11 +30,15 @@ export type Err<TCode extends string> = { success: false; error: ResultError<TCo
  * anything else succeeds with a payload.
  */
 export type Result<TData, TCode extends string> =
-  | (TData extends void ? Ok : OkWith<TData>)
+  | ([TData] extends [void] ? Ok : OkWith<TData>)
   | Err<TCode>;
 
-/** The success constructor: no argument for `void`, the payload otherwise. */
-type OkFactory<TData> = TData extends void ? () => Ok : (data: TData) => OkWith<TData>;
+/**
+ * The success constructor: no argument for `void`, the payload otherwise. The
+ * tuple stops the conditional distributing over a union payload, which would
+ * otherwise turn `ok` into a union of functions that accepts nothing.
+ */
+type OkFactory<TData> = [TData] extends [void] ? () => Ok : (data: TData) => OkWith<TData>;
 
 /**
  * A result constructor pair for one operation.

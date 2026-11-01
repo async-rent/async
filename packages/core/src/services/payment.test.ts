@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createTestDatabase } from "../../tests/database";
-import { createPaymentService } from "./payment";
-import type { CaptureOutcome, PaymentProviderAdapter } from "./payment";
+import {
+  captureProviderOrderResult,
+  createPaymentService,
+  createProviderOrderResult,
+  refundProviderPaymentResult,
+} from "./payment";
+import type { PaymentProviderAdapter } from "./payment";
 
 const urls = { returnUrl: "https://async.rent/paid", cancelUrl: "https://async.rent/cart" };
 const approvalUrl = "https://pay.example.com/approve";
@@ -28,15 +33,17 @@ function setup() {
   const createOrder = vi.fn<PaymentProviderAdapter["createOrder"]>(async () => {
     orders += 1;
 
-    return { externalOrderId: `order_${orders}`, approvalUrl };
+    return createProviderOrderResult.ok({ externalOrderId: `order_${orders}`, approvalUrl });
   });
-  const captureOrder = vi.fn<PaymentProviderAdapter["captureOrder"]>(
-    async ({ externalOrderId }): Promise<CaptureOutcome> => ({
+  const captureOrder = vi.fn<PaymentProviderAdapter["captureOrder"]>(async ({ externalOrderId }) =>
+    captureProviderOrderResult.ok({
       status: "succeeded",
       externalPaymentId: `capture_${externalOrderId}`,
     }),
   );
-  const refund = vi.fn<PaymentProviderAdapter["refund"]>(async () => {});
+  const refund = vi.fn<PaymentProviderAdapter["refund"]>(async () =>
+    refundProviderPaymentResult.ok(),
+  );
 
   const service = createPaymentService({
     db: database.db,
@@ -147,7 +154,9 @@ describe("startPayment", () => {
 
   it("keeps no payment when the provider fails", async () => {
     const s = setup();
-    s.createOrder.mockRejectedValueOnce(new Error("provider down"));
+    s.createOrder.mockResolvedValueOnce(
+      createProviderOrderResult.err("provider_unreachable", "provider down"),
+    );
 
     const result = await s.service.startPayment({
       rentalId: "rental_1",
@@ -213,10 +222,9 @@ describe("confirmPayment", () => {
   it("records a declined charge with its reason and leaves the rental unpaid", async () => {
     const s = setup();
     const externalOrderId = await start(s);
-    s.captureOrder.mockResolvedValueOnce({
-      status: "failed",
-      failureReason: "INSTRUMENT_DECLINED",
-    });
+    s.captureOrder.mockResolvedValueOnce(
+      captureProviderOrderResult.ok({ status: "failed", failureReason: "INSTRUMENT_DECLINED" }),
+    );
 
     const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
 
@@ -233,10 +241,9 @@ describe("confirmPayment", () => {
   it("lets the customer try again after a decline", async () => {
     const s = setup();
     const externalOrderId = await start(s);
-    s.captureOrder.mockResolvedValueOnce({
-      status: "failed",
-      failureReason: "INSTRUMENT_DECLINED",
-    });
+    s.captureOrder.mockResolvedValueOnce(
+      captureProviderOrderResult.ok({ status: "failed", failureReason: "INSTRUMENT_DECLINED" }),
+    );
     await s.service.confirmPayment({ provider: "paypal", externalOrderId });
 
     const retry = await s.service.startPayment({
@@ -282,7 +289,9 @@ describe("confirmPayment", () => {
   it("leaves the payment pending when the provider cannot be reached", async () => {
     const s = setup();
     const externalOrderId = await start(s);
-    s.captureOrder.mockRejectedValueOnce(new Error("provider down"));
+    s.captureOrder.mockResolvedValueOnce(
+      captureProviderOrderResult.err("provider_unreachable", "provider down"),
+    );
 
     const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
     const retry = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
@@ -341,7 +350,9 @@ describe("refundPayment", () => {
   it("keeps the payment paid when the provider fails to refund", async () => {
     const s = setup();
     const paymentId = await pay(s);
-    s.refund.mockRejectedValueOnce(new Error("provider down"));
+    s.refund.mockResolvedValueOnce(
+      refundProviderPaymentResult.err("provider_unreachable", "provider down"),
+    );
 
     const result = await s.service.refundPayment({ paymentId });
 

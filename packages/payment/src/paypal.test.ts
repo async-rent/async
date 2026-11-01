@@ -19,35 +19,39 @@ interface Reply {
 }
 
 const tokenReply: Reply = { body: { access_token: "access-token", expires_in: 32400 } };
+const unknownPath: Reply = { status: 404, body: { name: "RESOURCE_NOT_FOUND" } };
 
 // A PayPal that answers each path with a fixed reply and records what it was sent.
 function stubPayPal(replies: Record<string, Reply>) {
   const fetch = vi.fn<PayPalFetch>(async (url) => {
     const path = new URL(url).pathname;
-    const reply = replies[path] ?? (path === "/v1/oauth2/token" ? tokenReply : undefined);
-    if (!reply) throw new Error(`Unexpected request to ${path}`);
-
+    const reply = replies[path] ?? (path === "/v1/oauth2/token" ? tokenReply : unknownPath);
     const status = reply.status ?? 200;
-    if (reply.body === undefined) return new Response(null, { status });
 
-    return Response.json(reply.body, { status });
+    return reply.body === undefined
+      ? new Response(null, { status })
+      : Response.json(reply.body, { status });
   });
 
   const adapter = createPayPalAdapter({ clientId: "client", clientSecret: "secret", fetch });
 
-  // The request sent to `path`, with its JSON body parsed.
+  // The headers and JSON body last sent to `path`.
   const sentTo = (path: string) => {
-    const call = fetch.mock.calls.find(([url]) => url === `${sandbox}${path}`);
-    if (!call) throw new Error(`Nothing was sent to ${path}`);
+    const [, init] = fetch.mock.calls.filter(([url]) => url === `${sandbox}${path}`).at(-1) ?? [];
+    const headers = new Headers(init?.headers);
+    const isJson = headers.get("Content-Type") === "application/json";
+    const body = isJson && typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
 
-    const [, init] = call;
-    const body = typeof init.body === "string" && path !== "/v1/oauth2/token" ? init.body : "";
-
-    return { headers: new Headers(init.headers), body: body ? JSON.parse(body) : undefined };
+    return { headers, body };
   };
 
   return { adapter, fetch, sentTo };
 }
+
+const failure = (code: string, message: string) => ({
+  success: false,
+  error: { code, message: expect.stringContaining(message) },
+});
 
 const createdOrder = {
   id: "ORDER1",
@@ -75,20 +79,19 @@ const paypalError = (status: number, issue: string) => ({
 });
 
 describe("createOrder", () => {
+  const ordersPath = "/v2/checkout/orders";
+
   it("opens a captured order in the sandbox and returns where the customer approves it", async () => {
-    const paypal = stubPayPal({ "/v2/checkout/orders": { status: 201, body: createdOrder } });
+    const paypal = stubPayPal({ [ordersPath]: { status: 201, body: createdOrder } });
 
-    const created = await paypal.adapter.createOrder(order);
+    const result = await paypal.adapter.createOrder(order);
 
-    expect(created).toEqual({ externalOrderId: "ORDER1", approvalUrl });
-
-    const token = paypal.fetch.mock.calls[0];
-    expect(token?.[0]).toBe(`${sandbox}/v1/oauth2/token`);
-    expect(new Headers(token?.[1].headers).get("Authorization")).toBe(
+    expect(result).toEqual({ success: true, data: { externalOrderId: "ORDER1", approvalUrl } });
+    expect(paypal.sentTo("/v1/oauth2/token").headers.get("Authorization")).toBe(
       `Basic ${btoa("client:secret")}`,
     );
 
-    const sent = paypal.sentTo("/v2/checkout/orders");
+    const sent = paypal.sentTo(ordersPath);
     expect(sent.headers.get("Authorization")).toBe("Bearer access-token");
     expect(sent.body).toMatchObject({
       intent: "CAPTURE",
@@ -105,59 +108,49 @@ describe("createOrder", () => {
 
   it.each([
     { amount: 5, currency: "USD", value: "0.05" },
+    { amount: 0, currency: "USD", value: "0.00" },
     { amount: 123456, currency: "EUR", value: "1234.56" },
     { amount: 4500, currency: "JPY", value: "4500" },
     { amount: 150000, currency: "HUF", value: "1500" },
-    { amount: 0, currency: "USD", value: "0.00" },
   ])("sends $amount $currency minor units as $value", async ({ amount, currency, value }) => {
-    const paypal = stubPayPal({ "/v2/checkout/orders": { status: 201, body: createdOrder } });
+    const paypal = stubPayPal({ [ordersPath]: { status: 201, body: createdOrder } });
 
     await paypal.adapter.createOrder({ ...order, amount, currency });
 
-    expect(paypal.sentTo("/v2/checkout/orders").body.purchase_units[0].amount).toEqual({
+    expect(paypal.sentTo(ordersPath).body.purchase_units[0].amount).toEqual({
       currency_code: currency,
       value,
     });
   });
 
-  it("refuses a fractional amount in a currency PayPal only takes whole", async () => {
-    const paypal = stubPayPal({ "/v2/checkout/orders": { status: 201, body: createdOrder } });
-
-    await expect(
-      paypal.adapter.createOrder({ ...order, currency: "HUF", amount: 150050 }),
-    ).rejects.toThrow("whole HUF");
-    expect(paypal.fetch).not.toHaveBeenCalled();
-  });
-
-  it("refuses a currency PayPal does not accept before calling it", async () => {
-    const paypal = stubPayPal({ "/v2/checkout/orders": { status: 201, body: createdOrder } });
-
-    await expect(paypal.adapter.createOrder({ ...order, currency: "IDR" })).rejects.toThrow(
-      "PayPal does not accept IDR",
-    );
-    expect(paypal.fetch).not.toHaveBeenCalled();
-  });
-
-  it("refuses input that breaks the provider contract before calling PayPal", async () => {
+  it.each([
+    { name: "a fractional amount PayPal only takes whole", currency: "HUF", amount: 150050 },
+    { name: "a currency PayPal does not accept", currency: "IDR", amount: 37000 },
+    { name: "input that breaks the provider contract", currency: "USD", amount: -1 },
+  ])("refuses $name before calling PayPal", async ({ currency, amount }) => {
     const paypal = stubPayPal({});
 
-    await expect(paypal.adapter.createOrder({ ...order, amount: -1 })).rejects.toThrow(
-      "Invalid PayPal order",
-    );
+    const result = await paypal.adapter.createOrder({ ...order, currency, amount });
+
+    expect(result).toMatchObject({ success: false, error: { code: "invalid_request" } });
     expect(paypal.fetch).not.toHaveBeenCalled();
   });
 
-  it("throws PayPal's issue and debug id when it refuses the order", async () => {
-    const paypal = stubPayPal({
-      "/v2/checkout/orders": paypalError(422, "CURRENCY_NOT_SUPPORTED"),
-    });
+  it("fails with PayPal's issue and debug id when it refuses the order", async () => {
+    const paypal = stubPayPal({ [ordersPath]: paypalError(422, "CURRENCY_NOT_SUPPORTED") });
 
-    await expect(paypal.adapter.createOrder(order)).rejects.toThrow(
-      "PayPal could not create the order [422 CURRENCY_NOT_SUPPORTED]: CURRENCY_NOT_SUPPORTED happened. (debug id debug-1)",
-    );
+    const result = await paypal.adapter.createOrder(order);
+
+    expect(result).toMatchObject({
+      ...failure(
+        "provider_refused",
+        "PayPal could not create the order [422 CURRENCY_NOT_SUPPORTED]: CURRENCY_NOT_SUPPORTED happened. (debug id debug-1)",
+      ),
+      error: { cause: { status: 422, issue: "CURRENCY_NOT_SUPPORTED", debugId: "debug-1" } },
+    });
   });
 
-  it("throws when the credentials are rejected", async () => {
+  it("fails when the credentials are rejected", async () => {
     const paypal = stubPayPal({
       "/v1/oauth2/token": {
         status: 401,
@@ -165,18 +158,33 @@ describe("createOrder", () => {
       },
     });
 
-    await expect(paypal.adapter.createOrder(order)).rejects.toThrow(
-      "PayPal could not sign in [401 invalid_client]: Client Authentication failed",
+    const result = await paypal.adapter.createOrder(order);
+
+    expect(result).toMatchObject(
+      failure(
+        "provider_refused",
+        "PayPal could not sign in [401 invalid_client]: Client Authentication failed",
+      ),
     );
   });
 
-  it("throws when PayPal cannot be reached", async () => {
-    const fetch = vi.fn<PayPalFetch>(async () => {
-      throw new TypeError("fetch failed");
-    });
+  it("fails when PayPal answers with something it does not recognise", async () => {
+    const paypal = stubPayPal({ [ordersPath]: { status: 201, body: { id: "ORDER1", links: [] } } });
+
+    const result = await paypal.adapter.createOrder(order);
+
+    expect(result).toMatchObject(
+      failure("provider_response_invalid", "PayPal order ORDER1 has no approval link"),
+    );
+  });
+
+  it("fails when PayPal cannot be reached", async () => {
+    const fetch = vi.fn<PayPalFetch>(() => Promise.reject(new TypeError("fetch failed")));
     const adapter = createPayPalAdapter({ clientId: "client", clientSecret: "secret", fetch });
 
-    await expect(adapter.createOrder(order)).rejects.toThrow("PayPal could not be reached");
+    const result = await adapter.createOrder(order);
+
+    expect(result).toMatchObject(failure("provider_unreachable", "PayPal could not be reached"));
   });
 
   it("talks to live PayPal only when asked to", async () => {
@@ -188,33 +196,41 @@ describe("createOrder", () => {
       fetch,
     });
 
-    await expect(adapter.createOrder(order)).rejects.toThrow();
+    await adapter.createOrder(order);
+
     expect(fetch.mock.calls[0]?.[0]).toBe("https://api-m.paypal.com/v1/oauth2/token");
   });
 });
 
 describe("captureOrder", () => {
   const capturePath = "/v2/checkout/orders/ORDER1/capture";
+  const capture = { externalOrderId: "ORDER1" };
 
   it("collects the money and returns the capture id", async () => {
     const paypal = stubPayPal({
       [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
     });
 
-    const outcome = await paypal.adapter.captureOrder({ externalOrderId: "ORDER1" });
+    const result = await paypal.adapter.captureOrder(capture);
 
-    expect(outcome).toEqual({ status: "succeeded", externalPaymentId: "CAPTURE1" });
+    expect(result).toEqual({
+      success: true,
+      data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
+    });
     expect(paypal.sentTo(capturePath).headers.get("PayPal-Request-Id")).toBe("capture-ORDER1");
   });
 
   it("reports a refused payment method as a failed charge", async () => {
     const paypal = stubPayPal({ [capturePath]: paypalError(422, "INSTRUMENT_DECLINED") });
 
-    const outcome = await paypal.adapter.captureOrder({ externalOrderId: "ORDER1" });
+    const result = await paypal.adapter.captureOrder(capture);
 
-    expect(outcome).toEqual({
-      status: "failed",
-      failureReason: "The payment method was declined. Try another one.",
+    expect(result).toEqual({
+      success: true,
+      data: {
+        status: "failed",
+        failureReason: "The payment method was declined. Try another one.",
+      },
     });
   });
 
@@ -230,15 +246,18 @@ describe("captureOrder", () => {
       },
     });
 
-    const outcome = await paypal.adapter.captureOrder({ externalOrderId: "ORDER1" });
+    const result = await paypal.adapter.captureOrder(capture);
 
-    expect(outcome).toEqual({
-      status: "failed",
-      failureReason: "PayPal declined the payment (DECLINED_BY_RISK_FRAUD_FILTERS).",
+    expect(result).toEqual({
+      success: true,
+      data: {
+        status: "failed",
+        failureReason: "PayPal declined the payment (DECLINED_BY_RISK_FRAUD_FILTERS).",
+      },
     });
   });
 
-  it("throws while a capture is pending, so the payment stays pending", async () => {
+  it("fails while a capture is pending, so the payment stays pending", async () => {
     const paypal = stubPayPal({
       [capturePath]: {
         status: 201,
@@ -250,25 +269,31 @@ describe("captureOrder", () => {
       },
     });
 
-    await expect(paypal.adapter.captureOrder({ externalOrderId: "ORDER1" })).rejects.toThrow(
-      "PayPal capture CAPTURE1 is PENDING (PENDING_REVIEW)",
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toMatchObject(
+      failure("payment_pending", "PayPal capture CAPTURE1 is PENDING (PENDING_REVIEW)"),
     );
   });
 
-  it("throws a refusal that is not about the customer", async () => {
+  it("fails on a refusal that is not about the customer", async () => {
     const paypal = stubPayPal({ [capturePath]: paypalError(422, "ORDER_ALREADY_CAPTURED") });
 
-    await expect(paypal.adapter.captureOrder({ externalOrderId: "ORDER1" })).rejects.toMatchObject({
-      message: expect.stringContaining("[422 ORDER_ALREADY_CAPTURED]"),
-      cause: { status: 422, issue: "ORDER_ALREADY_CAPTURED", debugId: "debug-1" },
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toMatchObject({
+      ...failure("provider_refused", "[422 ORDER_ALREADY_CAPTURED]"),
+      error: { cause: { status: 422, issue: "ORDER_ALREADY_CAPTURED", debugId: "debug-1" } },
     });
   });
 
-  it("throws when PayPal fails", async () => {
+  it("fails when PayPal fails", async () => {
     const paypal = stubPayPal({ [capturePath]: { status: 503 } });
 
-    await expect(paypal.adapter.captureOrder({ externalOrderId: "ORDER1" })).rejects.toThrow(
-      "PayPal could not capture the order [503]",
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toMatchObject(
+      failure("provider_refused", "PayPal could not capture the order [503]"),
     );
   });
 });
@@ -282,7 +307,9 @@ describe("refund", () => {
       [refundPath]: { status: 201, body: { id: "REFUND1", status: "COMPLETED" } },
     });
 
-    await expect(paypal.adapter.refund(input)).resolves.toBeUndefined();
+    const result = await paypal.adapter.refund(input);
+
+    expect(result).toEqual({ success: true });
 
     const sent = paypal.sentTo(refundPath);
     expect(sent.body).toEqual({ amount: { currency_code: "USD", value: "370.00" } });
@@ -294,28 +321,32 @@ describe("refund", () => {
       [refundPath]: { status: 201, body: { id: "REFUND1", status: "PENDING" } },
     });
 
-    await expect(paypal.adapter.refund(input)).resolves.toBeUndefined();
+    expect(await paypal.adapter.refund(input)).toEqual({ success: true });
   });
 
   it("treats a capture that is already fully refunded as done", async () => {
     const paypal = stubPayPal({ [refundPath]: paypalError(422, "CAPTURE_FULLY_REFUNDED") });
 
-    await expect(paypal.adapter.refund(input)).resolves.toBeUndefined();
+    expect(await paypal.adapter.refund(input)).toEqual({ success: true });
   });
 
-  it("throws when PayPal refuses the refund", async () => {
+  it("fails when PayPal refuses the refund", async () => {
     const paypal = stubPayPal({ [refundPath]: paypalError(422, "REFUND_NOT_ALLOWED") });
 
-    await expect(paypal.adapter.refund(input)).rejects.toThrow(
-      "PayPal could not refund the payment [422 REFUND_NOT_ALLOWED]",
+    const result = await paypal.adapter.refund(input);
+
+    expect(result).toMatchObject(
+      failure("provider_refused", "PayPal could not refund the payment [422 REFUND_NOT_ALLOWED]"),
     );
   });
 
-  it("throws when the refund failed at PayPal", async () => {
+  it("fails when the refund failed at PayPal", async () => {
     const paypal = stubPayPal({
       [refundPath]: { status: 201, body: { id: "REFUND1", status: "FAILED" } },
     });
 
-    await expect(paypal.adapter.refund(input)).rejects.toThrow("PayPal refund REFUND1 is FAILED");
+    const result = await paypal.adapter.refund(input);
+
+    expect(result).toMatchObject(failure("provider_refused", "PayPal refund REFUND1 is FAILED"));
   });
 });

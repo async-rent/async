@@ -1,14 +1,22 @@
 import {
+  attempt,
   captureProviderOrderInputSchema,
+  captureProviderOrderResult,
   createProviderOrderInputSchema,
+  createProviderOrderResult,
+  createResult,
   refundProviderPaymentInputSchema,
+  refundProviderPaymentResult,
 } from "@async-rent/core";
 import type {
-  CaptureOutcome,
   CaptureProviderOrderInput,
+  CaptureProviderOrderResult,
   CreateProviderOrderInput,
+  CreateProviderOrderResult,
   PaymentProviderAdapter,
+  ProviderErrorCode,
   RefundProviderPaymentInput,
+  RefundProviderPaymentResult,
 } from "@async-rent/core";
 import { z } from "zod";
 
@@ -31,8 +39,8 @@ export interface CreatePayPalAdapterOptions {
 
 /**
  * What PayPal said when it refused a request: the HTTP status plus the first
- * issue it listed. Attached as the `cause` of every error the adapter throws,
- * so the payment service keeps it for logs. `debugId` is what PayPal support
+ * issue it listed. It is the `cause` of every `provider_refused` failure, so
+ * the payment service keeps it for logs. `debugId` is what PayPal support
  * asks for.
  */
 export interface PayPalFailure {
@@ -49,7 +57,7 @@ const baseUrls: Record<PayPalEnvironment, string> = {
 
 // Capture refusals that mean "this customer cannot pay this order", which the
 // payment service records as a failed charge the customer can retry. Any other
-// refusal is our or PayPal's fault and is thrown instead.
+// refusal is our or PayPal's fault and fails the call instead.
 const declineReasons = new Map<string, string>([
   ["INSTRUMENT_DECLINED", "The payment method was declined. Try another one."],
   ["REDIRECT_PAYER_FOR_ALTERNATE_FUNDING", "The payment method was declined. Try another one."],
@@ -97,6 +105,13 @@ const currencyDigits = new Map<string, number>([
 
 // PayPal rejects decimals for these, even though ISO 4217 gives them cents.
 const wholeUnitCurrencies = new Set(["HUF", "TWD"]);
+
+const payPalAmountResult = createResult(
+  z.object({ currency_code: z.string(), value: z.string() }),
+  z.enum(["invalid_request"]),
+);
+
+type PayPalAmountResult = z.infer<typeof payPalAmountResult.schema>;
 
 const tokenSchema = z.object({ access_token: z.string() });
 
@@ -153,7 +168,15 @@ const errorBodySchema = z
   })
   .catch({});
 
-type PayPalReply = { ok: true; body: unknown } | { ok: false; failure: PayPalFailure };
+/** How one round trip to PayPal ended. Only `answered` carries a body to read. */
+type PayPalReply =
+  | { kind: "answered"; body: unknown }
+  /** PayPal answered with an error status. `step` names the request when it is not the main one. */
+  | { kind: "refused"; failure: PayPalFailure; step?: string }
+  | { kind: "unreachable"; cause: unknown }
+  | { kind: "unexpected"; cause: unknown };
+
+type FailedReply = Exclude<PayPalReply, { kind: "answered" }>;
 
 interface PostOptions {
   body?: unknown;
@@ -173,27 +196,30 @@ interface PostOptions {
  * const async = createAsync({ db, paymentProviders: { paypal } });
  * ```
  *
- * Capture and refund send an idempotency key derived from the PayPal id, so a
- * retried confirm or refund replays PayPal's first answer instead of moving
- * money twice. Every call fetches a fresh access token; nothing is cached.
+ * Every method returns a result and never throws. Capture and refund send an
+ * idempotency key derived from the PayPal id, so a retried confirm or refund
+ * replays PayPal's first answer instead of moving money twice. Every call
+ * fetches a fresh access token; nothing is cached.
  */
 export function createPayPalAdapter(options: CreatePayPalAdapterOptions): PaymentProviderAdapter {
   const baseUrl = baseUrls[options.environment ?? "sandbox"];
   const send = options.fetch ?? globalFetch;
-  const credentials = btoa(`${options.clientId}:${options.clientSecret}`);
+  const credentials = toBasicCredentials(options.clientId, options.clientSecret);
 
   async function request(url: string, init: RequestInit): Promise<PayPalReply> {
-    const response = await send(url, init).catch((error: unknown) => {
-      throw new Error("PayPal could not be reached", { cause: error });
-    });
-    const body = await readBody(response);
-    if (response.ok) return { ok: true, body };
+    const sent = await attempt(send(url, init));
+    if (!sent.ok) return { kind: "unreachable", cause: sent.error };
 
-    return { ok: false, failure: toFailure(response.status, body) };
+    // An empty or non-JSON body reads as `undefined`; the schemas decide if that is fine.
+    const read = await attempt<unknown>(sent.value.json());
+    const body = read.ok ? read.value : undefined;
+    if (sent.value.ok) return { kind: "answered", body };
+
+    return { kind: "refused", failure: toFailure(sent.value.status, body) };
   }
 
-  async function accessToken(): Promise<string> {
-    const reply = await request(`${baseUrl}/v1/oauth2/token`, {
+  async function post(path: string, { body, requestId }: PostOptions = {}): Promise<PayPalReply> {
+    const token = await request(`${baseUrl}/v1/oauth2/token`, {
       method: "POST",
       headers: {
         Authorization: `Basic ${credentials}`,
@@ -201,18 +227,16 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
       },
       body: "grant_type=client_credentials",
     });
-    if (!reply.ok) throw toError("sign in", reply.failure);
+    if (token.kind === "refused") return { ...token, step: "sign in" };
+    if (token.kind !== "answered") return token;
 
-    return parseOrThrow(tokenSchema, reply.body, "PayPal sent an unexpected token").access_token;
-  }
-
-  async function post(path: string, { body, requestId }: PostOptions = {}): Promise<PayPalReply> {
-    const token = await accessToken();
+    const parsed = tokenSchema.safeParse(token.body);
+    if (!parsed.success) return { kind: "unexpected", cause: parsed.error };
 
     return request(`${baseUrl}${path}`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${parsed.data.access_token}`,
         "Content-Type": "application/json",
         Prefer: "return=representation",
         ...(requestId ? { "PayPal-Request-Id": requestId } : {}),
@@ -221,59 +245,90 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     });
   }
 
-  async function createOrder(input: CreateProviderOrderInput) {
-    const order = parseOrThrow(createProviderOrderInputSchema, input, "Invalid PayPal order");
+  async function createOrder(input: CreateProviderOrderInput): Promise<CreateProviderOrderResult> {
+    const { ok, err } = createProviderOrderResult;
 
-    const reply = await post("/v2/checkout/orders", { body: toOrderBody(order) });
-    if (!reply.ok) throw toError("create the order", reply.failure);
+    const order = createProviderOrderInputSchema.safeParse(input);
+    if (!order.success) return err("invalid_request", "Invalid PayPal order", order.error);
 
-    const created = parseOrThrow(createdOrderSchema, reply.body, "PayPal sent an unexpected order");
-    const approval = created.links.find(({ rel }) => rel === "payer-action" || rel === "approve");
-    if (!approval) throw new Error(`PayPal order ${created.id} has no approval link`);
+    const amount = toPayPalAmount(order.data.amount, order.data.currency);
+    if (!amount.success) return amount;
 
-    return { externalOrderId: created.id, approvalUrl: approval.href };
+    const reply = await post("/v2/checkout/orders", { body: toOrderBody(order.data, amount.data) });
+    if (reply.kind !== "answered") return err(...toReplyError("create the order", reply));
+
+    const created = createdOrderSchema.safeParse(reply.body);
+    if (!created.success) {
+      return err("provider_response_invalid", "PayPal sent an unexpected order", created.error);
+    }
+
+    const { id, links } = created.data;
+    const approval = links.find(({ rel }) => rel === "payer-action" || rel === "approve");
+    if (!approval)
+      return err("provider_response_invalid", `PayPal order ${id} has no approval link`);
+
+    return ok({ externalOrderId: id, approvalUrl: approval.href });
   }
 
-  async function captureOrder(input: CaptureProviderOrderInput): Promise<CaptureOutcome> {
-    const { externalOrderId } = parseOrThrow(
-      captureProviderOrderInputSchema,
-      input,
-      "Invalid PayPal capture",
-    );
+  async function captureOrder(
+    input: CaptureProviderOrderInput,
+  ): Promise<CaptureProviderOrderResult> {
+    const { ok, err } = captureProviderOrderResult;
 
-    const id = encodeURIComponent(externalOrderId);
-    const reply = await post(`/v2/checkout/orders/${id}/capture`, {
+    const capture = captureProviderOrderInputSchema.safeParse(input);
+    if (!capture.success) return err("invalid_request", "Invalid PayPal capture", capture.error);
+
+    const { externalOrderId } = capture.data;
+    const reply = await post(`/v2/checkout/orders/${encodeURIComponent(externalOrderId)}/capture`, {
       requestId: `capture-${externalOrderId}`,
     });
-    if (!reply.ok) return toDeclined(reply.failure);
 
-    return toCaptureOutcome(
-      parseOrThrow(capturedOrderSchema, reply.body, "PayPal sent an unexpected capture"),
-    );
+    const declined = reply.kind === "refused" ? toDeclineReason(reply.failure) : undefined;
+    if (declined) return ok({ status: "failed", failureReason: declined });
+    if (reply.kind !== "answered") return err(...toReplyError("capture the order", reply));
+
+    const order = capturedOrderSchema.safeParse(reply.body);
+    if (!order.success) {
+      return err("provider_response_invalid", "PayPal sent an unexpected capture", order.error);
+    }
+
+    return toCaptureResult(order.data);
   }
 
-  async function refund(input: RefundProviderPaymentInput): Promise<void> {
-    const { externalPaymentId, amount, currency } = parseOrThrow(
-      refundProviderPaymentInputSchema,
-      input,
-      "Invalid PayPal refund",
+  async function refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult> {
+    const { ok, err } = refundProviderPaymentResult;
+
+    const parsed = refundProviderPaymentInputSchema.safeParse(input);
+    if (!parsed.success) return err("invalid_request", "Invalid PayPal refund", parsed.error);
+
+    const { externalPaymentId, amount, currency } = parsed.data;
+    const value = toPayPalAmount(amount, currency);
+    if (!value.success) return value;
+
+    const reply = await post(
+      `/v2/payments/captures/${encodeURIComponent(externalPaymentId)}/refund`,
+      {
+        body: { amount: value.data },
+        requestId: `refund-${externalPaymentId}`,
+      },
     );
-
-    const id = encodeURIComponent(externalPaymentId);
-    const reply = await post(`/v2/payments/captures/${id}/refund`, {
-      body: { amount: toPayPalAmount(amount, currency) },
-      requestId: `refund-${externalPaymentId}`,
-    });
     // Already refunded in full is the state we asked for.
-    if (!reply.ok && reply.failure.issue === "CAPTURE_FULLY_REFUNDED") return;
-    if (!reply.ok) throw toError("refund the payment", reply.failure);
+    if (reply.kind === "refused" && reply.failure.issue === "CAPTURE_FULLY_REFUNDED") return ok();
+    if (reply.kind !== "answered") return err(...toReplyError("refund the payment", reply));
 
-    const refunded = parseOrThrow(refundSchema, reply.body, "PayPal sent an unexpected refund");
+    const refunded = refundSchema.safeParse(reply.body);
+    if (!refunded.success) {
+      return err("provider_response_invalid", "PayPal sent an unexpected refund", refunded.error);
+    }
+
+    const { id, status, status_details } = refunded.data;
     // A pending refund is accepted by PayPal and settles on its side.
-    if (refunded.status === "COMPLETED" || refunded.status === "PENDING") return;
+    if (status === "COMPLETED" || status === "PENDING") return ok();
 
-    throw new Error(
-      `PayPal refund ${refunded.id} is ${refunded.status}${reasonSuffix(refunded.status_details)}`,
+    return err(
+      "provider_refused",
+      `PayPal refund ${id} is ${status}${toReasonSuffix(status_details)}`,
+      refunded.data,
     );
   }
 
@@ -285,27 +340,11 @@ function globalFetch(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, init);
 }
 
-// The JSON body of a reply, the raw text when it is not JSON, `undefined` when empty.
-async function readBody(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) return undefined;
+// HTTP Basic credentials, UTF-8 encoded first so `btoa` only ever sees bytes. Pure.
+function toBasicCredentials(clientId: string, clientSecret: string): string {
+  const bytes = new TextEncoder().encode(`${clientId}:${clientSecret}`);
 
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-function parseOrThrow<TSchema extends z.ZodType>(
-  schema: TSchema,
-  value: unknown,
-  message: string,
-): z.infer<TSchema> {
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) throw new Error(message, { cause: parsed.error });
-
-  return parsed.data;
+  return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
 }
 
 // Pure.
@@ -321,61 +360,72 @@ function toFailure(status: number, body: unknown): PayPalFailure {
   };
 }
 
+// The `err` arguments for a reply that carries no usable body. Pure.
+function toReplyError(
+  action: string,
+  reply: FailedReply,
+): readonly [ProviderErrorCode, string, unknown] {
+  if (reply.kind === "unreachable") {
+    return ["provider_unreachable", "PayPal could not be reached", reply.cause];
+  }
+  if (reply.kind === "unexpected") {
+    return ["provider_response_invalid", "PayPal sent an unexpected token", reply.cause];
+  }
+
+  const { status, issue, description, debugId } = reply.failure;
+  const message = [
+    `PayPal could not ${reply.step ?? action} [${status}${issue ? ` ${issue}` : ""}]`,
+    description ? `: ${description}` : "",
+    debugId ? ` (debug id ${debugId})` : "",
+  ].join("");
+
+  return ["provider_refused", message, reply.failure];
+}
+
+// The reason to show when a capture refusal is the customer's to fix. Pure.
+function toDeclineReason(failure: PayPalFailure): string | undefined {
+  if (failure.status !== 422 || !failure.issue) return undefined;
+
+  return declineReasons.get(failure.issue);
+}
+
 // Pure.
-function toError(action: string, failure: PayPalFailure): Error {
-  const issue = failure.issue ? ` ${failure.issue}` : "";
-  const description = failure.description ? `: ${failure.description}` : "";
-  const debugId = failure.debugId ? ` (debug id ${failure.debugId})` : "";
+function toCaptureResult(order: CapturedOrder): CaptureProviderOrderResult {
+  const { ok, err } = captureProviderOrderResult;
 
-  return new Error(
-    `PayPal could not ${action} [${failure.status}${issue}]${description}${debugId}`,
-    { cause: failure },
-  );
-}
-
-// A refused capture the customer can act on becomes a failed charge; anything else throws.
-function toDeclined(failure: PayPalFailure): CaptureOutcome {
-  const reason = failure.status === 422 ? declineReasons.get(failure.issue ?? "") : undefined;
-  if (!reason) throw toError("capture the order", failure);
-
-  return { status: "failed", failureReason: reason };
-}
-
-function toCaptureOutcome(order: CapturedOrder): CaptureOutcome {
   const [capture] = order.purchase_units.flatMap((unit) => unit.payments?.captures ?? []);
-  if (!capture) throw new Error(`PayPal order ${order.id} has no capture`);
+  if (!capture) return err("provider_response_invalid", `PayPal order ${order.id} has no capture`);
 
+  const reason = toReasonSuffix(capture.status_details);
   if (capture.status === "COMPLETED") {
-    return { status: "succeeded", externalPaymentId: capture.id };
+    return ok({ status: "succeeded", externalPaymentId: capture.id });
   }
   if (capture.status === "DECLINED" || capture.status === "FAILED") {
-    return {
-      status: "failed",
-      failureReason: `PayPal declined the payment${reasonSuffix(capture.status_details)}.`,
-    };
+    return ok({ status: "failed", failureReason: `PayPal declined the payment${reason}.` });
   }
 
   // PENDING (held for review, or an eCheck clearing) has not moved the money
-  // yet, so it is neither outcome. Throwing leaves the payment pending.
-  throw new Error(
-    `PayPal capture ${capture.id} is ${capture.status}${reasonSuffix(capture.status_details)}`,
-  );
+  // yet, so it is neither outcome. Failing the call leaves the payment pending.
+  return err("payment_pending", `PayPal capture ${capture.id} is ${capture.status}${reason}`);
 }
 
 // Pure.
-function reasonSuffix(details: { reason: string } | undefined): string {
+function toReasonSuffix(details: { reason: string } | undefined): string {
   return details ? ` (${details.reason})` : "";
 }
 
 // Pure.
-function toOrderBody(order: CreateProviderOrderInput) {
+function toOrderBody(
+  order: CreateProviderOrderInput,
+  amount: { currency_code: string; value: string },
+) {
   return {
     intent: "CAPTURE",
     purchase_units: [
       {
         reference_id: order.reference,
         description: `Async rental ${order.reference}`,
-        amount: toPayPalAmount(order.amount, order.currency),
+        amount,
       },
     ],
     payment_source: {
@@ -398,20 +448,25 @@ function toOrderBody(order: CreateProviderOrderInput) {
  * is `{ currency_code: "USD", value: "370.00" }`. Built from the digits rather
  * than by division, so no float rounding can creep in. Pure.
  */
-function toPayPalAmount(amount: number, currency: string) {
+function toPayPalAmount(amount: number, currency: string): PayPalAmountResult {
+  const { ok, err } = payPalAmountResult;
+
   const digits = currencyDigits.get(currency);
-  if (digits === undefined) throw new Error(`PayPal does not accept ${currency}`);
+  if (digits === undefined) return err("invalid_request", `PayPal does not accept ${currency}`);
 
   const minor = String(amount).padStart(digits + 1, "0");
   const whole = digits === 0 ? minor : minor.slice(0, -digits);
   const fraction = digits === 0 ? "" : minor.slice(-digits);
 
   if (!wholeUnitCurrencies.has(currency)) {
-    return { currency_code: currency, value: fraction ? `${whole}.${fraction}` : whole };
+    return ok({ currency_code: currency, value: fraction ? `${whole}.${fraction}` : whole });
   }
   if (/[^0]/.test(fraction)) {
-    throw new Error(`PayPal only takes whole ${currency} amounts, got ${amount} minor units`);
+    return err(
+      "invalid_request",
+      `PayPal only takes whole ${currency} amounts, got ${amount} minor units`,
+    );
   }
 
-  return { currency_code: currency, value: whole };
+  return ok({ currency_code: currency, value: whole });
 }

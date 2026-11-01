@@ -34,31 +34,78 @@ export const refundProviderPaymentInputSchema = z.object({
 
 export type RefundProviderPaymentInput = z.infer<typeof refundProviderPaymentInputSchema>;
 
+export const providerErrorCodeSchema = z
+  .enum([
+    "invalid_request",
+    "provider_unreachable",
+    "provider_refused",
+    "provider_response_invalid",
+    "payment_pending",
+  ])
+  .describe(
+    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, or it is still holding the money.",
+  );
+
+export type ProviderErrorCode = z.infer<typeof providerErrorCodeSchema>;
+
+export const captureOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("succeeded"),
+    externalPaymentId: z.string().describe("Provider-side payment the money settled as."),
+  }),
+  z.object({
+    status: z.literal("failed"),
+    failureReason: z.string().describe("Why the provider declined the charge, safe to show."),
+  }),
+]);
+
+export type CaptureOutcome = z.infer<typeof captureOutcomeSchema>;
+
+/** Result constructors for `PaymentProviderAdapter.createOrder`. */
+export const createProviderOrderResult = createResult(
+  z.object({
+    externalOrderId: z.string().describe("Provider-side order the customer approves."),
+    approvalUrl: z.url().describe("Where the customer approves the charge."),
+  }),
+  providerErrorCodeSchema,
+);
+
+export type CreateProviderOrderResult = z.infer<typeof createProviderOrderResult.schema>;
+
+/** Result constructors for `PaymentProviderAdapter.captureOrder`. */
+export const captureProviderOrderResult = createResult(
+  captureOutcomeSchema,
+  providerErrorCodeSchema,
+);
+
+export type CaptureProviderOrderResult = z.infer<typeof captureProviderOrderResult.schema>;
+
+/** Result constructors for `PaymentProviderAdapter.refund`. */
+export const refundProviderPaymentResult = createResult(z.void(), providerErrorCodeSchema);
+
+export type RefundProviderPaymentResult = z.infer<typeof refundProviderPaymentResult.schema>;
+
 /**
  * What a payment company must do for the payment service. The service only
  * talks to this interface, so adding a provider means writing one adapter and
  * registering it by name; nothing here changes. Each method's input has a
- * schema above, so an adapter can validate what it receives.
+ * schema above, so an adapter can validate what it receives, and each returns
+ * a result built with the matching constructors above.
  *
- * An adapter throws when the provider cannot be reached. A charge the provider
- * refuses is not an error: `captureOrder` reports it as a `failed` outcome.
+ * An adapter never throws. A charge the provider declines is not an error
+ * either: `captureOrder` succeeds with a `failed` outcome, which the service
+ * records so the customer can try again.
  */
 export interface PaymentProviderAdapter {
   /** Opens a charge at the provider and returns where the customer approves it. */
-  createOrder(
-    input: CreateProviderOrderInput,
-  ): Promise<{ externalOrderId: string; approvalUrl: string }>;
+  createOrder(input: CreateProviderOrderInput): Promise<CreateProviderOrderResult>;
 
   /** Takes the money once the customer has approved the order. */
-  captureOrder(input: CaptureProviderOrderInput): Promise<CaptureOutcome>;
+  captureOrder(input: CaptureProviderOrderInput): Promise<CaptureProviderOrderResult>;
 
   /** Returns a settled charge to the customer in full. */
-  refund(input: RefundProviderPaymentInput): Promise<void>;
+  refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult>;
 }
-
-export type CaptureOutcome =
-  | { status: "succeeded"; externalPaymentId: string }
-  | { status: "failed"; failureReason: string };
 
 /** The adapters a deployment has configured, keyed by provider name. */
 export type PaymentProviders = Partial<Record<PaymentProvider, PaymentProviderAdapter>>;
@@ -228,22 +275,20 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       return err("payment_already_started", `Rental ${rental.number} already has a payment`);
     }
 
-    const order = await attempt(
-      adapter.createOrder({
-        reference: rental.number,
-        amount: rental.totalDueToday,
-        currency: rental.currency,
-        returnUrl: input.returnUrl,
-        cancelUrl: input.cancelUrl,
-      }),
-    );
-    if (!order.ok) {
+    const order = await adapter.createOrder({
+      reference: rental.number,
+      amount: rental.totalDueToday,
+      currency: rental.currency,
+      returnUrl: input.returnUrl,
+      cancelUrl: input.cancelUrl,
+    });
+    if (!order.success) {
       return err("provider_request_failed", "The payment provider failed", order.error);
     }
 
     const charge = {
       provider: input.provider,
-      externalOrderId: order.value.externalOrderId,
+      externalOrderId: order.data.externalOrderId,
       externalPaymentId: null,
       amount: rental.totalDueToday,
       currency: rental.currency,
@@ -277,7 +322,7 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     const payment = parsePayment(row);
     if (!payment) return err("payment_data_invalid", `Payment ${row.id} has invalid data`);
 
-    return ok({ payment, approvalUrl: order.value.approvalUrl });
+    return ok({ payment, approvalUrl: order.data.approvalUrl });
   }
 
   /**
@@ -316,12 +361,12 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       return payment ? ok(payment) : err("payment_data_invalid", `Payment ${row.id} is invalid`);
     }
 
-    const captured = await attempt(adapter.captureOrder({ externalOrderId: row.externalOrderId }));
-    if (!captured.ok) {
+    const captured = await adapter.captureOrder({ externalOrderId: row.externalOrderId });
+    if (!captured.success) {
       return err("provider_request_failed", "The payment provider failed", captured.error);
     }
 
-    const outcome = captured.value;
+    const outcome = captured.data;
     const now = new Date();
 
     // The payment and its rental move together: a captured payment confirms the
@@ -384,14 +429,12 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       return err("provider_not_configured", `Provider ${row.provider} is not configured`);
     }
 
-    const refunded = await attempt(
-      adapter.refund({
-        externalPaymentId: row.externalPaymentId,
-        amount: row.amount,
-        currency: row.currency,
-      }),
-    );
-    if (!refunded.ok) {
+    const refunded = await adapter.refund({
+      externalPaymentId: row.externalPaymentId,
+      amount: row.amount,
+      currency: row.currency,
+    });
+    if (!refunded.success) {
       return err("provider_request_failed", "The payment provider failed", refunded.error);
     }
 
