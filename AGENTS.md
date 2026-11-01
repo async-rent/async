@@ -33,8 +33,10 @@ release. Add a tool name to select part of the graph. For example, run
 Dependency direction — never violate it:
 
 ```
-packages/db  <-  packages/core  <-  apps/api · apps/storefront · apps/studio · tools/mcp
+packages/db  <-  packages/core  <-  packages/payment  <-  apps/api · apps/storefront · apps/studio · tools/mcp
 ```
+
+Apps import `packages/core` directly as well; `packages/payment` only adds the provider adapters they compose into it.
 
 - **`packages/db`** exports the Drizzle D1 schema only (tables + inferred types). No logic, no queries. Migration SQL is generated here by drizzle-kit — its `drizzle.config.ts` only sets the schema entry point, the dialect (`sqlite`), and the output folder (`packages/db/migrations`); no credentials, no migrator.
 - **`packages/core`** is the only package with data access. No wrangler and no drizzle config — it imports the schema from `packages/db` and receives a `DrizzleD1Database`. Migrations are applied by the root `wrangler.jsonc` (`migrations_dir: "packages/db/migrations"`), which owns one D1 database per environment — `async-rent` (default), `async-rent_dev`, `async-rent_staging` — via `wrangler d1 migrations apply <database_name> --local/--remote` (`--env dev` / `--env staging` for the latter two). Never by core or the db package. Services follow `packages/core/src/services/catalog.ts`: `create<Name>Service({ db }: Create<Name>ServiceOptions)` factory + `createResult` success/failure unions (zod-typed), exposed to apps through a single `createAsync({ db })` composition root.
@@ -42,7 +44,7 @@ packages/db  <-  packages/core  <-  apps/api · apps/storefront · apps/studio �
   - `apps/api`: core → HTTP API (Hono). Authenticated with user-created API keys.
   - `apps/storefront` / `apps/studio`: core → TanStack Start server actions. They never call the api app.
   - `tools/mcp`: core → MCP tools. Same composition as api, but authenticated with OAuth. It never calls the api app.
-- Keep external providers (payments, etc.) behind interfaces defined in core; provider specifics live in sibling adapters inside core.
+- Keep external providers (payments, etc.) behind interfaces defined in core. Payment provider specifics live in `packages/payment`, one sibling file per provider (`src/paypal.ts`), each implementing core's `PaymentProviderAdapter` from a `create<Provider>Adapter(options)` factory. That package has no data access, never imports `packages/db`, and is the only place a provider's SDK or REST calls appear. Provider credentials come from Worker secrets and are passed to the factory; apps compose `createAsync({ db, paymentProviders: { paypal: createPayPalAdapter({ ... }) } })`.
 
 <!--ASYNC ARCHITECTURE END-->
 

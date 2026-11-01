@@ -1,0 +1,25 @@
+{
+  "name": "@async-rent/payment",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check"
+  },
+  "dependencies": {
+    "@async-rent/core": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@total-typescript/shoehorn": "catalog:",
+    "@types/node": "catalog:",
+    "bumpp": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
