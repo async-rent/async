@@ -39,12 +39,12 @@ export type FulfillmentStatusValue = (typeof fulfillmentStatusValues)[number];
  * Contact, address and line prices are copied onto the rows at checkout so
  * later catalog edits never rewrite history. Dates are ISO calendar dates
  * (`YYYY-MM-DD`) and delivery window bounds are local `HH:MM` strings, matching
- * the domain schemas.
+ * core's schemas.
  *
  * The recurring agreement is not denormalized here: `billing_agreements.rental_id`
  * is the single authoritative edge, and it is unique per live agreement, so a
  * rental has at most one agreement that still bills. Core reads it from there
- * when it fills the domain's `billingAgreementId`.
+ * when it fills the schema's `billingAgreementId`.
  *
  * The city is stored as `locations.id`, the same key `product_prices` uses, so
  * every location reference in the schema points at a primary key.

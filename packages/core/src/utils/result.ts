@@ -1,142 +1,120 @@
 import { z } from "zod";
 
 /**
- * Result: the outcome of an operation as plain data instead of a thrown error.
+ * A result is the outcome of an operation expressed as plain data, never a
+ * thrown error. Callers branch on `success` instead of wrapping calls in
+ * try/catch, so every failure a service can produce is visible in its type.
  *
- * A failed result carries a stable `code` to branch on and a `message` that is
- * safe to show to the user. A successful result may carry a payload.
+ * A failure carries a stable `code` to branch on and a `message` safe to show
+ * to a user. It may also carry the original `cause` so a swallowed database or
+ * provider error keeps its stack and context instead of vanishing.
  */
 
-/** The error branch shared by every failed result. */
-export const resultErrorSchema = z.object({
-  code: z.string().describe('Stable error code, e.g. "rental_not_found".'),
-  message: z.string().describe("Human-readable message safe to show to the user."),
-});
-
-export type ResultError<TErrorCode extends string = string> = {
-  code: TErrorCode;
+export type ResultError<TCode extends string = string> = {
+  code: TCode;
   message: string;
+  cause?: unknown;
 };
 
-/** A failed error branch whose `code` is narrowed to the given schema. */
-export function createResultErrorSchema<TErrorCodeSchema extends z.ZodType<string>>(
-  errCodeSchema: TErrorCodeSchema,
-) {
-  return z.object({
-    code: errCodeSchema,
-    message: z.string().describe("Human-readable message safe to show to the user."),
-  });
-}
+/** `{ success: true }` — an operation that returns nothing. */
+export type Ok = { success: true };
 
-/** `{ success: true }` — the result of an operation with nothing to return. */
-export const successResultSchema = z.object({
-  success: z.literal(true),
-});
+/** `{ success: true, data }` — an operation that returns a value. */
+export type OkWith<TData> = { success: true; data: TData };
 
-export type SuccessResult = z.infer<typeof successResultSchema>;
-
-/** `{ success: true, data }` — the result of an operation that returns data. */
-export function createSuccessResultSchema<TDataSchema extends z.ZodType>(dataSchema: TDataSchema) {
-  return z.object({
-    success: z.literal(true),
-    data: dataSchema,
-  });
-}
-
-export type SuccessWithDataResult<TData> = {
-  success: true;
-  data: TData;
-};
-
-/** `{ success: false, error: { code, message } }`. */
-export function createFailedResultSchema<TErrorCodeSchema extends z.ZodType<string>>(
-  errCodeSchema: TErrorCodeSchema,
-) {
-  return z.object({
-    success: z.literal(false),
-    error: createResultErrorSchema(errCodeSchema),
-  });
-}
-
-export type FailedResult<TErrorCode extends string> = {
-  success: false;
-  error: ResultError<TErrorCode>;
-};
-
-/** A success carrying `schema`, or a failure carrying one of the error codes. */
-export function createResultSchema<
-  TDataSchema extends z.ZodType,
-  TErrorCodeSchema extends z.ZodType<string>,
->(dataSchema: TDataSchema, errCodeSchema: TErrorCodeSchema) {
-  return z.discriminatedUnion("success", [
-    dataSchema.type === "void" ? successResultSchema : createSuccessResultSchema(dataSchema),
-    createFailedResultSchema(errCodeSchema),
-  ]);
-}
+/** `{ success: false, error }` — an operation that failed. */
+export type Err<TCode extends string> = { success: false; error: ResultError<TCode> };
 
 /**
- * The result type, kept as a plain type because it switches on whether `TData`
- * is `void`: a void operation succeeds without a `data` key.
+ * The result of an operation. A `void` operation succeeds without `data`;
+ * anything else succeeds with a payload.
  */
-export type Result<TData, TErrorCode extends string> =
-  | (TData extends void ? SuccessResult : SuccessWithDataResult<TData>)
-  | FailedResult<TErrorCode>;
+export type Result<TData, TCode extends string> =
+  | (TData extends void ? Ok : OkWith<TData>)
+  | Err<TCode>;
+
+/** The success constructor: no argument for `void`, the payload otherwise. */
+type OkFactory<TData> = TData extends void ? () => Ok : (data: TData) => OkWith<TData>;
 
 /**
- * The success branch: an operation with `void` data succeeds without a
- * payload, anything else succeeds with a parsed payload.
+ * A result constructor pair for one operation.
+ *
+ * `ok` builds the success branch (parsing the payload against `dataSchema`, so
+ * a service can never return a shape its own schema rejects). `err` builds a
+ * failure from a known code. `schema` is the zod schema of the whole union,
+ * exported so a consumer that chooses to validate a boundary can.
  */
-export type SuccessResultFactory<TData> = TData extends void
-  ? () => SuccessResult
-  : (data: TData) => SuccessWithDataResult<TData>;
+export interface ResultFactory<TData, TCode extends string> {
+  schema: z.ZodType<Result<TData, TCode>>;
+  ok: OkFactory<TData>;
+  err: (code: TCode, message: string, cause?: unknown) => Err<TCode>;
+}
 
-export function successResult<TSchema extends z.ZodType>(
-  schema: TSchema,
-): SuccessResultFactory<z.infer<TSchema>> {
-  const success = true;
-
-  if (schema.type === "void") {
-    return (() => ({ success })) as unknown as SuccessResultFactory<z.infer<TSchema>>;
+function okResultSchema<TSchema extends z.ZodType>(dataSchema: TSchema) {
+  if (dataSchema.type === "void") {
+    return z.object({ success: z.literal(true) });
   }
 
-  return ((data: z.infer<TSchema>) => ({
-    success,
-    data: schema.parse(data),
-  })) as unknown as SuccessResultFactory<z.infer<TSchema>>;
+  return z.object({ success: z.literal(true), data: dataSchema });
 }
 
-export function failedResult<TErrorCodeSchema extends z.ZodType<string>>(
-  _schema: TErrorCodeSchema,
-) {
-  return (
-    code: z.infer<TErrorCodeSchema>,
-    message: string,
-  ): FailedResult<z.infer<TErrorCodeSchema>> => ({
-    success: false,
-    error: { code, message },
+function errResultSchema<TCodeSchema extends z.ZodType<string>>(codeSchema: TCodeSchema) {
+  return z.object({
+    success: z.literal(false),
+    error: z.object({
+      code: codeSchema,
+      message: z.string(),
+      cause: z.unknown().optional(),
+    }),
   });
 }
 
-export interface ResultFactory<TData, TErrorCode extends string> {
-  schema: z.ZodType<Result<TData, TErrorCode>>;
-  success: SuccessResultFactory<TData>;
-  failed: (code: TErrorCode, message: string) => FailedResult<TErrorCode>;
-}
-
-export function createResult<TSchema extends z.ZodType, TErrorCodeSchema extends z.ZodType<string>>(
+export function createResult<TSchema extends z.ZodType, TCodeSchema extends z.ZodType<string>>(
   dataSchema: TSchema,
-  errCodeSchema: TErrorCodeSchema,
-): ResultFactory<z.infer<TSchema>, z.infer<TErrorCodeSchema>> {
-  const schema = createResultSchema(dataSchema, errCodeSchema);
-  const success = successResult(dataSchema);
-  const failed = failedResult(errCodeSchema);
+  codeSchema: TCodeSchema,
+): ResultFactory<z.infer<TSchema>, z.infer<TCodeSchema>> {
+  const schema = z.discriminatedUnion("success", [
+    okResultSchema(dataSchema),
+    errResultSchema(codeSchema),
+  ]);
+
+  const ok = (
+    dataSchema.type === "void"
+      ? () => ({ success: true })
+      : (data: z.infer<TSchema>) => ({ success: true, data: dataSchema.parse(data) })
+  ) as OkFactory<z.infer<TSchema>>;
+
+  const err = (
+    code: z.infer<TCodeSchema>,
+    message: string,
+    cause?: unknown,
+  ): Err<z.infer<TCodeSchema>> => ({
+    success: false,
+    error: cause === undefined ? { code, message } : { code, message, cause },
+  });
 
   return {
-    schema: schema as unknown as ResultFactory<
-      z.infer<TSchema>,
-      z.infer<TErrorCodeSchema>
-    >["schema"],
-    success,
-    failed,
+    schema: schema as unknown as ResultFactory<z.infer<TSchema>, z.infer<TCodeSchema>>["schema"],
+    ok,
+    err,
   };
+}
+
+/** The outcome of running a promise without letting it throw. */
+export type Attempt<TValue> = { ok: true; value: TValue } | { ok: false; error: unknown };
+
+/**
+ * Runs a promise and captures its rejection instead of letting it throw.
+ *
+ * This replaces the pattern of `.catch(() => null)`, which threw away the
+ * reason a database call failed and left every failure indistinguishable. The
+ * caller gets the error back and maps it to a typed failure, keeping the cause
+ * for logs: `const read = await attempt(db.select()...); if (!read.ok) return err("...", "...", read.error);`
+ */
+export async function attempt<TValue>(promise: Promise<TValue>): Promise<Attempt<TValue>> {
+  try {
+    return { ok: true, value: await promise };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }

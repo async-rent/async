@@ -461,14 +461,20 @@ describe("searchProducts", () => {
     expect(second.data.hasMore).toBe(false);
   });
 
-  it("reports a read failure instead of throwing", async () => {
+  it("reports a read failure instead of throwing, keeping the cause", async () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.searchProducts(makeQuery())).resolves.toEqual({
+    const result = await service.searchProducts(makeQuery());
+
+    expect(result).toMatchObject({
       success: false,
       error: { code: "failed_to_search_products", message: "Failed to search products" },
     });
+    // The underlying database error is carried as the cause rather than
+    // swallowed, so a failure can be logged with the query that broke.
+    if (result.success) throw new Error("expected a failure");
+    expect(result.error.cause).toBeDefined();
   });
 });
 
@@ -534,7 +540,7 @@ describe("getProductById", () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.getProductById({ productId: "prd_smartdesk" })).resolves.toEqual({
+    await expect(service.getProductById({ productId: "prd_smartdesk" })).resolves.toMatchObject({
       success: false,
       error: { code: "failed_to_fetch_product", message: "Failed to fetch product" },
     });
@@ -606,7 +612,7 @@ describe("listLocations", () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.listLocations()).resolves.toEqual({
+    await expect(service.listLocations()).resolves.toMatchObject({
       success: false,
       error: { code: "failed_to_list_locations", message: "Failed to list locations" },
     });
@@ -638,7 +644,7 @@ describe("listCategories", () => {
     const { service, sqlite } = setup();
     sqlite.close();
 
-    await expect(service.listCategories()).resolves.toEqual({
+    await expect(service.listCategories()).resolves.toMatchObject({
       success: false,
       error: { code: "failed_to_list_categories", message: "Failed to list categories" },
     });

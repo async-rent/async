@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createTestDatabase, type TestDatabase } from "../../tests/database";
 import type { CreateRentalInput, ListRentalsInput } from "./rental";
-import type { Rental } from "../models";
+import type { Rental } from "../schemas";
+import { cancellableRentalStatusValues, rentalNumberSchema } from "../schemas";
 import { createCartService } from "./cart";
-import { createRentalService } from "./rental";
+import { createPricingService } from "./pricing";
+import {
+  createRentalService,
+  generateRentalNumber,
+  isRentalCancellable,
+  isValidRentalPeriod,
+} from "./rental";
 
 const createdAt = Date.UTC(2026, 0, 1);
 
@@ -112,10 +119,12 @@ function setup() {
   const database = createTestDatabase();
   seedCatalog(database);
 
+  const pricing = createPricingService();
+
   return {
     ...database,
-    cart: createCartService({ db: database.db }),
-    service: createRentalService({ db: database.db }),
+    cart: createCartService({ db: database.db, pricing }),
+    service: createRentalService({ db: database.db, pricing }),
   };
 }
 
@@ -641,5 +650,69 @@ describe("cancelRental", () => {
       success: false,
       error: { code: "failed_to_load_rental" },
     });
+  });
+});
+
+describe("generateRentalNumber", () => {
+  it("produces a number that matches the rental number schema", () => {
+    const number = generateRentalNumber(new Date(Date.UTC(2026, 5, 15)), () => 0);
+
+    expect(number.startsWith("AR-2026-")).toBe(true);
+    expect(rentalNumberSchema.safeParse(number).success).toBe(true);
+  });
+
+  it("draws every suffix character from the unambiguous alphabet", () => {
+    // Walk the alphabet one step per draw: the suffix must never land on 0/O/1/I,
+    // which the schema's character class rejects.
+    const stepped = (size: number) => {
+      const draws = Array.from({ length: size }, (_, index) => index / 32);
+      let next = 0;
+
+      return () => draws[next++] ?? 0;
+    };
+
+    const number = generateRentalNumber(new Date(Date.UTC(2026, 0, 1)), stepped(6));
+
+    expect(rentalNumberSchema.safeParse(number).success).toBe(true);
+  });
+
+  it("varies the suffix with the random source", () => {
+    const low = generateRentalNumber(new Date(Date.UTC(2026, 0, 1)), () => 0);
+    const high = generateRentalNumber(new Date(Date.UTC(2026, 0, 1)), () => 0.99);
+
+    expect(low).not.toBe(high);
+  });
+});
+
+describe("isRentalCancellable", () => {
+  it("allows cancelling a live rental", () => {
+    for (const status of cancellableRentalStatusValues) {
+      expect(isRentalCancellable(status)).toBe(true);
+    }
+  });
+
+  it("refuses a terminal rental", () => {
+    expect(isRentalCancellable("completed")).toBe(false);
+    expect(isRentalCancellable("cancelled")).toBe(false);
+  });
+});
+
+describe("isValidRentalPeriod", () => {
+  it("accepts a period that ends on or after it starts", () => {
+    expect(isValidRentalPeriod({ startDate: "2026-02-01" })).toBe(true);
+    expect(isValidRentalPeriod({ startDate: "2026-02-01", endDate: "2026-02-01" })).toBe(true);
+    expect(isValidRentalPeriod({ startDate: "2026-02-01", endDate: "2026-03-01" })).toBe(true);
+  });
+
+  it("rejects a period that ends before it starts", () => {
+    expect(isValidRentalPeriod({ startDate: "2026-02-10", endDate: "2026-02-01" })).toBe(false);
+  });
+
+  it("accepts a delivery on or before the start, and rejects one after it", () => {
+    expect(isValidRentalPeriod({ startDate: "2026-02-01", deliveryDate: "2026-01-31" })).toBe(true);
+    expect(isValidRentalPeriod({ startDate: "2026-02-01", deliveryDate: "2026-02-01" })).toBe(true);
+    expect(isValidRentalPeriod({ startDate: "2026-02-01", deliveryDate: "2026-02-05" })).toBe(
+      false,
+    );
   });
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { amountSchema, currencyCodeSchema, dateTimeSchema, timestampsSchema } from "./shared";
+import { amountSchema, currencyCodeSchema } from "./money";
+import { dateTimeSchema, timestampsSchema } from "./time";
 
 export const paymentStatusSchema = z
   .enum(["pending", "authorized", "succeeded", "failed", "refunded"])

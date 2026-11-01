@@ -18,9 +18,9 @@ export type ProductStatusValue = (typeof productStatusValues)[number];
 /**
  * Catalog products.
  *
- * The domain shape nests images, highlights, specs and per-city prices inside a
- * product; here each of those is its own table keyed by the product it belongs
- * to. The translation back into the nested domain shape happens in core.
+ * Core's product schema nests images, highlights, specs and per-city prices
+ * inside a product; here each of those is its own table keyed by the product it
+ * belongs to. The translation back into the nested shape happens in core.
  */
 export const products = sqliteTable(
   "products",
@@ -100,8 +100,8 @@ export const productSpecs = sqliteTable(
  * Weekly price and stock for one product in one city.
  *
  * A missing row means the product is not offered there. Amounts are minor
- * units in the currency of the city (`locations.currency`), matching the
- * domain's `amountSchema`.
+ * units in the currency of the city (`locations.currency`), matching core's
+ * `amountSchema`.
  *
  * The currency and the delivery fee are not repeated here: they belong to the
  * city, so every price in a city is in the same currency and an order pays

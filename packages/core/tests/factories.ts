@@ -6,17 +6,17 @@ import type {
   Category,
   ChargeSummary,
   Contact,
+  Image,
   Location,
   Payment,
   Product,
   ProductPrice,
   Rental,
   RentalItem,
-} from "../src/models";
-import type { Image } from "../src/models";
+} from "../src/schemas";
 
 /**
- * Shared builders for valid domain objects.
+ * Shared builders for values that satisfy core's schemas.
  *
  * Every builder returns a value that passes its schema, so tests only override
  * the fields they care about (`makeProduct({ status: "archived" })`) and never

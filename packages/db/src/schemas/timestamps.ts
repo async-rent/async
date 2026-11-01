@@ -6,7 +6,7 @@ import { integer } from "drizzle-orm/sqlite-core";
  *
  * Stored as Unix epoch milliseconds (integer) instead of ISO strings: cheaper
  * to store, sort and index in SQLite. Core converts them to the ISO dates its
- * domain schemas expect.
+ * schemas expect.
  */
 export const timestamps = {
   createdAt: integer("created_at", { mode: "timestamp_ms" })

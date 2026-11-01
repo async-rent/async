@@ -1,35 +1,7 @@
 import { z } from "zod";
-import { amountSchema, currencyCodeSchema, imageSchema, timestampsSchema } from "./shared";
-
-export const locationStatusSchema = z
-  .enum(["active", "coming_soon"])
-  .describe("Whether the location is open for rentals or announced for later.");
-
-export const locationSchema = z.object({
-  id: z.string(),
-  slug: z.string().describe("URL-safe route key, e.g. ko-tao."),
-  name: z.string(),
-  country: z.string(),
-  timezone: z
-    .string()
-    .describe("IANA time zone name the location operates in, e.g. Asia/Makassar."),
-  description: z.string().optional(),
-  currency: currencyCodeSchema,
-  deliveryFee: amountSchema.describe("Delivery fee charged per rental in this location."),
-  status: locationStatusSchema.default("active"),
-});
-
-export type Location = z.infer<typeof locationSchema>;
-
-export const categorySchema = z.object({
-  id: z.string(),
-  slug: z.string(),
-  name: z.string(),
-  description: z.string().optional(),
-  sortOrder: z.number().int().nonnegative().default(0),
-});
-
-export type Category = z.infer<typeof categorySchema>;
+import { imageSchema } from "./image";
+import { amountSchema } from "./money";
+import { timestampsSchema } from "./time";
 
 export const productPriceSchema = z.object({
   locationId: z.string().describe("Location this price applies to."),
@@ -77,11 +49,3 @@ export const productSchema = z
   .extend(timestampsSchema.shape);
 
 export type Product = z.infer<typeof productSchema>;
-
-export function priceForLocation(product: Product, locationId: string) {
-  return product.prices.find((price) => price.locationId === locationId);
-}
-
-export function isLocationActive(location: Pick<Location, "status">): boolean {
-  return location.status === "active";
-}

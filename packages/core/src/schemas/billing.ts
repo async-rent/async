@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { currencyCodeSchema, dateTimeSchema, timestampsSchema } from "./shared";
+import { currencyCodeSchema } from "./money";
 import { paymentProviderSchema } from "./payment";
+import { dateTimeSchema, timestampsSchema } from "./time";
 
 export const billingIntervalSchema = z
   .enum(["weekly"])

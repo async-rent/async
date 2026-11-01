@@ -13,42 +13,25 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
-import type { Rental, RentalItem } from "../models";
+import type { Rental, RentalItem, RentalStatus } from "../schemas";
 import {
   addressSchema,
+  cancellableRentalStatusSchema,
   cancellableRentalStatusValues,
   contactSchema,
   dateSchema,
-  generateRentalNumber,
-  isLocationActive,
-  isRentalCancellable,
-  priceLines,
   rentalSchema,
   rentalStatusSchema,
   timeWindowSchema,
-} from "../models";
-import { createResult, groupBy, paginationSchema } from "../utils";
+} from "../schemas";
+import { attempt, createResult, groupBy, paginationSchema } from "../utils";
+import { isLocationActive } from "./catalog";
+import type { PricingService } from "./pricing";
 
 export interface CreateRentalServiceOptions {
   db: DrizzleD1Database;
-}
-
-// A rental number clashing is rare, but the unique constraint is the arbiter:
-// retry a few times before giving up rather than trusting randomness blindly.
-const rentalNumberAttempts = 5;
-
-/**
- * Whether a caught insert error is a clash on the unique rental `number`.
- *
- * SQLite reports it as `UNIQUE constraint failed: rentals.number`. Only this
- * one failure is worth retrying with a fresh number; any other error (a CHECK,
- * a foreign key, a transient fault) must surface with its cause intact rather
- * than be paid for five times behind a generic code.
- */
-function isRentalNumberClash(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-
-  return /unique constraint failed:\s*rentals\.number/i.test(message);
+  /** The pricing service the rental uses to total its frozen lines. */
+  pricing: PricingService;
 }
 
 export const createRentalInputSchema = z
@@ -68,16 +51,13 @@ export const createRentalInputSchema = z
       .describe("When the customer accepted the rental terms."),
     notes: z.string().optional().describe("Internal notes, not shown to the customer."),
   })
-  // The cart carries no dates, so this input is the only gate on the period
-  // before it reaches billing and delivery scheduling: a period must not end
-  // before it starts, and the gear must not be dropped off after it starts.
-  .refine((input) => !input.endDate || input.endDate >= input.startDate, {
-    error: "endDate cannot be before startDate",
+  // The cart carries no dates, so these bounds are the only gate on the period
+  // before it reaches billing and delivery scheduling. Consumers validate the
+  // input against this schema; the service re-checks the same rule with
+  // `isValidRentalPeriod` since it is a hard invariant on the stored row.
+  .refine((input) => isValidRentalPeriod(input), {
+    error: "endDate cannot be before startDate and deliveryDate cannot be after startDate",
     path: ["endDate"],
-  })
-  .refine((input) => !input.deliveryDate || input.deliveryDate <= input.startDate, {
-    error: "deliveryDate cannot be after startDate",
-    path: ["deliveryDate"],
   });
 
 export type CreateRentalInput = z.infer<typeof createRentalInputSchema>;
@@ -163,6 +143,76 @@ const cancelRentalResult = createResult(
 export const cancelRentalResultSchema = cancelRentalResult.schema;
 export type CancelRentalResult = z.infer<typeof cancelRentalResultSchema>;
 
+/** The unambiguous alphabet a rental number's suffix is drawn from (no 0/O, 1/I). */
+const rentalNumberAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const rentalNumberSuffixLength = 6;
+
+/**
+ * A human-readable rental reference, e.g. `AR-2026-7KQ4M2`, matching
+ * `rentalNumberSchema`.
+ *
+ * The suffix is random, not sequential, so one rental never reveals how many
+ * came before it; the database's unique constraint is the final arbiter, and
+ * the service retries on the rare clash. `now` and `random` are injected so the
+ * function stays pure and the format can be asserted in a test.
+ */
+export function generateRentalNumber(
+  now: Date = new Date(),
+  random: () => number = Math.random,
+): string {
+  const lastIndex = rentalNumberAlphabet.length - 1;
+  const suffix = Array.from({ length: rentalNumberSuffixLength }, () => {
+    // Clamp the index into range: an injected source returning exactly 1 would
+    // otherwise land one past the end and produce an empty character, yielding
+    // a short suffix that fails the pattern.
+    const index = Math.min(Math.floor(random() * rentalNumberAlphabet.length), lastIndex);
+
+    return rentalNumberAlphabet.charAt(index);
+  }).join("");
+
+  return `AR-${now.getUTCFullYear()}-${suffix}`;
+}
+
+/** Whether a rental can still be cancelled from its current status. Pure. */
+export function isRentalCancellable(status: RentalStatus): boolean {
+  return cancellableRentalStatusSchema.safeParse(status).success;
+}
+
+/**
+ * Whether a rental period is coherent: it must not end before it starts, and
+ * the gear must not be dropped off after the period starts. Pure, so an app can
+ * gate a checkout form and the service can re-check the same invariant before
+ * it freezes a row.
+ */
+export function isValidRentalPeriod(input: {
+  startDate: string;
+  endDate?: string;
+  deliveryDate?: string;
+}): boolean {
+  if (input.endDate && input.endDate < input.startDate) return false;
+  if (input.deliveryDate && input.deliveryDate > input.startDate) return false;
+
+  return true;
+}
+
+// A rental number clashing is rare, but the unique constraint is the arbiter:
+// retry a few times before giving up rather than trusting randomness blindly.
+const rentalNumberAttempts = 5;
+
+/**
+ * Whether a caught insert error is a clash on the unique rental `number`.
+ *
+ * SQLite reports it as `UNIQUE constraint failed: rentals.number`. Only this
+ * one failure is worth retrying with a fresh number; any other error (a CHECK,
+ * a foreign key, a transient fault) must surface with its cause intact rather
+ * than be paid for five times behind a generic code.
+ */
+function isRentalNumberClash(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return /unique constraint failed:\s*rentals\.number/i.test(message);
+}
+
 /** A cart line priced for the city, ready to freeze onto a rental. */
 interface PricedLine {
   productId: string;
@@ -177,67 +227,67 @@ interface PricedLine {
   stock: number | null;
 }
 
-export function createRentalService({ db }: CreateRentalServiceOptions) {
-  // Build a rental from its row and its frozen line items. The row already
-  // carries the snapshot, so no catalog join is needed to read it back.
-  function toRental(row: RentalRow, items: RentalItemRow[]): Rental {
-    const lines: RentalItem[] = items.map((item) => ({
-      productId: item.productId,
-      name: item.name,
-      slug: item.slug,
-      image: item.imageUrl ? { url: item.imageUrl, alt: item.imageAlt ?? undefined } : undefined,
-      quantity: item.quantity,
-      weeklyPrice: item.weeklyPrice,
-      deposit: item.deposit ?? undefined,
-    }));
+// Build a rental from its row and its frozen line items. Pure: the row already
+// carries the snapshot, so no catalog join is needed to read it back.
+function toRental(row: RentalRow, items: RentalItemRow[]): Rental {
+  const lines: RentalItem[] = items.map((item) => ({
+    productId: item.productId,
+    name: item.name,
+    slug: item.slug,
+    image: item.imageUrl ? { url: item.imageUrl, alt: item.imageAlt ?? undefined } : undefined,
+    quantity: item.quantity,
+    weeklyPrice: item.weeklyPrice,
+    deposit: item.deposit ?? undefined,
+  }));
 
-    return {
-      id: row.id,
-      number: row.number,
-      userId: row.userId ?? undefined,
-      contact: {
-        name: row.contactName,
-        email: row.contactEmail,
-        whatsapp: row.contactWhatsapp ?? undefined,
-      },
-      address: {
-        line1: row.addressLine1,
-        line2: row.addressLine2 ?? undefined,
-        area: row.addressArea ?? undefined,
-        city: row.addressCity,
-        postcode: row.addressPostcode ?? undefined,
-        countryCode: row.addressCountryCode,
-        deliveryNotes: row.deliveryNotes ?? undefined,
-      },
-      locationId: row.locationId,
+  return {
+    id: row.id,
+    number: row.number,
+    userId: row.userId ?? undefined,
+    contact: {
+      name: row.contactName,
+      email: row.contactEmail,
+      whatsapp: row.contactWhatsapp ?? undefined,
+    },
+    address: {
+      line1: row.addressLine1,
+      line2: row.addressLine2 ?? undefined,
+      area: row.addressArea ?? undefined,
+      city: row.addressCity,
+      postcode: row.addressPostcode ?? undefined,
+      countryCode: row.addressCountryCode,
+      deliveryNotes: row.deliveryNotes ?? undefined,
+    },
+    locationId: row.locationId,
+    currency: row.currency,
+    items: lines,
+    startDate: row.startDate,
+    endDate: row.endDate ?? undefined,
+    deliveryDate: row.deliveryDate ?? undefined,
+    deliveryWindow:
+      row.deliveryWindowStart && row.deliveryWindowEnd
+        ? { start: row.deliveryWindowStart, end: row.deliveryWindowEnd }
+        : undefined,
+    status: row.status,
+    fulfillmentStatus: row.fulfillmentStatus ?? undefined,
+    summary: {
       currency: row.currency,
-      items: lines,
-      startDate: row.startDate,
-      endDate: row.endDate ?? undefined,
-      deliveryDate: row.deliveryDate ?? undefined,
-      deliveryWindow:
-        row.deliveryWindowStart && row.deliveryWindowEnd
-          ? { start: row.deliveryWindowStart, end: row.deliveryWindowEnd }
-          : undefined,
-      status: row.status,
-      fulfillmentStatus: row.fulfillmentStatus ?? undefined,
-      summary: {
-        currency: row.currency,
-        weeklySubtotal: row.weeklySubtotal,
-        deposit: row.deposit,
-        deliveryFee: row.deliveryFee,
-        discount: row.discount,
-        totalDueToday: row.totalDueToday,
-      },
-      paymentStatusSnapshot: row.paymentStatusSnapshot ?? undefined,
-      termsAcceptedAt: row.termsAcceptedAt?.toISOString(),
-      cancelledAt: row.cancelledAt?.toISOString(),
-      notes: row.notes ?? undefined,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt?.toISOString(),
-    };
-  }
+      weeklySubtotal: row.weeklySubtotal,
+      deposit: row.deposit,
+      deliveryFee: row.deliveryFee,
+      discount: row.discount,
+      totalDueToday: row.totalDueToday,
+    },
+    paymentStatusSnapshot: row.paymentStatusSnapshot ?? undefined,
+    termsAcceptedAt: row.termsAcceptedAt?.toISOString(),
+    cancelledAt: row.cancelledAt?.toISOString(),
+    notes: row.notes ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt?.toISOString(),
+  };
+}
 
+export function createRentalService({ db, pricing }: CreateRentalServiceOptions) {
   const itemsOf = (rentalId: string) =>
     db
       .select()
@@ -246,17 +296,17 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
       .orderBy(asc(rentalItems.position));
 
   async function readRental(row: RentalRow): Promise<GetRentalResult> {
-    const { success, failed } = getRentalResult;
+    const { ok, err } = getRentalResult;
 
-    const items = await itemsOf(row.id).catch(() => null);
-    if (!items) return failed("failed_to_load_rental", "Failed to load rental");
+    const items = await attempt(itemsOf(row.id));
+    if (!items.ok) return err("failed_to_load_rental", "Failed to load rental", items.error);
 
-    const rental = toRental(row, items);
+    const rental = toRental(row, items.value);
     if (!rentalSchema.safeParse(rental).success) {
-      return failed("rental_data_invalid", `Rental ${row.id} has invalid data`);
+      return err("rental_data_invalid", `Rental ${row.id} has invalid data`);
     }
 
-    return success(rental);
+    return ok(rental);
   }
 
   // The cart's available lines, priced for its city, in display order. Mirrors
@@ -316,41 +366,46 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
   }
 
   async function createRental(input: CreateRentalInput): Promise<CreateRentalResult> {
-    const { success, failed } = createRentalResult;
+    const { ok, err } = createRentalResult;
 
-    // Apps parse at the boundary, but the period rule is a hard invariant on
-    // the stored row, so re-check it here and surface a typed failure rather
-    // than trusting the caller or throwing a ZodError out of the service.
-    const parsed = createRentalInputSchema.safeParse(input);
-    if (!parsed.success) {
-      return failed("invalid_rental_period", parsed.error.issues[0]?.message ?? "Invalid rental");
+    // The period rule is a hard invariant on the stored row, so re-check it
+    // here with the pure guard and surface a typed failure rather than trusting
+    // the caller. Consumers validate the whole input against the schema; core
+    // only re-asserts the one invariant it must never store a violation of.
+    if (!isValidRentalPeriod(input)) {
+      return err("invalid_rental_period", "The rental period or delivery day is out of range");
     }
 
-    const loaded = await db
-      .select({
-        userId: carts.userId,
-        locationId: carts.locationId,
-        currency: locations.currency,
-        deliveryFee: locations.deliveryFee,
-        status: locations.status,
-      })
-      .from(carts)
-      .innerJoin(locations, eq(locations.id, carts.locationId))
-      .where(eq(carts.id, input.cartId))
-      .limit(1)
-      .catch(() => null);
-    if (!loaded) return failed("failed_to_load_cart", "Failed to load cart");
+    const loaded = await attempt(
+      db
+        .select({
+          userId: carts.userId,
+          locationId: carts.locationId,
+          currency: locations.currency,
+          deliveryFee: locations.deliveryFee,
+          status: locations.status,
+        })
+        .from(carts)
+        .innerJoin(locations, eq(locations.id, carts.locationId))
+        .where(eq(carts.id, input.cartId))
+        .limit(1),
+    );
+    if (!loaded.ok) return err("failed_to_load_cart", "Failed to load cart", loaded.error);
 
-    const [cart] = loaded;
-    if (!cart) return failed("cart_not_found", `Cart ${input.cartId} not found`);
+    const [cart] = loaded.value;
+    if (!cart) return err("cart_not_found", `Cart ${input.cartId} not found`);
     if (!isLocationActive(cart)) {
-      return failed("location_not_available", `Location ${cart.locationId} is not open yet`);
+      return err("location_not_available", `Location ${cart.locationId} is not open yet`);
     }
 
-    const lines = await pricedLines(input.cartId).catch(() => null);
-    if (!lines) return failed("failed_to_load_cart", "Failed to load cart");
+    const loadedLines = await attempt(pricedLines(input.cartId));
+    if (!loadedLines.ok) {
+      return err("failed_to_load_cart", "Failed to load cart", loadedLines.error);
+    }
+
+    const lines = loadedLines.value;
     if (lines.length === 0) {
-      return failed("cart_is_empty", "A rental needs at least one available item");
+      return err("cart_is_empty", "A rental needs at least one available item");
     }
 
     // Re-check availability at the freeze, the same hard limit the cart service
@@ -359,13 +414,13 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
     // Stock is held for this rental by decrementing it in the same batch below.
     const shortLine = lines.find((line) => line.stock != null && line.quantity > line.stock);
     if (shortLine) {
-      return failed(
+      return err(
         "product_out_of_stock",
         `Only ${shortLine.stock} of ${shortLine.name} left in ${cart.locationId}`,
       );
     }
 
-    const summary = priceLines({
+    const summary = pricing.priceLines({
       currency: cart.currency,
       deliveryFee: cart.deliveryFee,
       lines: lines.map((line) => ({
@@ -401,11 +456,11 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
     // `number` is the one expected failure. Emptying the cart in the same batch
     // means a second submit finds an empty cart and is refused, so one cart can
     // never become two billable rentals.
-    for (let attempt = 0; attempt < rentalNumberAttempts; attempt++) {
+    for (let attemptIndex = 0; attemptIndex < rentalNumberAttempts; attemptIndex++) {
       const number = generateRentalNumber(now);
 
-      const outcome = await db
-        .batch([
+      const written = await attempt(
+        db.batch([
           db.insert(rentals).values({
             id: rentalId,
             number,
@@ -450,77 +505,69 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
                 ),
               ),
           ),
-        ])
-        .then(() => ({ ok: true as const }))
-        .catch((error: unknown) => ({ ok: false as const, error }));
+        ]),
+      );
 
-      if (!outcome.ok) {
-        // Only a clash on the number is retried; any other failure is surfaced.
-        if (isRentalNumberClash(outcome.error)) continue;
+      if (!written.ok) {
+        // Only a clash on the number is retried; any other failure surfaces
+        // with its cause rather than being paid for five times.
+        if (isRentalNumberClash(written.error)) continue;
 
-        return failed("failed_to_create_rental", "Failed to create rental");
+        return err("failed_to_create_rental", "Failed to create rental", written.error);
       }
 
-      const read = await db
-        .batch([
+      const read = await attempt(
+        db.batch([
           db.select().from(rentals).where(eq(rentals.id, rentalId)).limit(1),
           itemsOf(rentalId),
-        ])
-        .catch(() => null);
+        ]),
+      );
+      if (!read.ok) return err("failed_to_create_rental", "Failed to create rental", read.error);
 
-      const created = read?.[0]?.[0];
-      const savedItems = read?.[1];
-      if (!created || !savedItems) {
-        return failed("failed_to_create_rental", "Failed to create rental");
-      }
+      const [[created], savedItems] = read.value;
+      if (!created) return err("failed_to_create_rental", "Failed to create rental");
 
       const rental = toRental(created, savedItems);
       if (!rentalSchema.safeParse(rental).success) {
-        return failed("rental_data_invalid", `Rental ${created.id} has invalid data`);
+        return err("rental_data_invalid", `Rental ${created.id} has invalid data`);
       }
 
-      return success(rental);
+      return ok(rental);
     }
 
-    return failed("failed_to_create_rental", "Failed to create rental");
+    return err("failed_to_create_rental", "Failed to create rental");
   }
 
   async function getRentalById(input: GetRentalByIdInput): Promise<GetRentalResult> {
-    const { failed } = getRentalResult;
+    const { err } = getRentalResult;
 
-    const rows = await db
-      .select()
-      .from(rentals)
-      .where(eq(rentals.id, input.rentalId))
-      .limit(1)
-      .catch(() => null);
-    if (!rows) return failed("failed_to_load_rental", "Failed to load rental");
+    const rows = await attempt(
+      db.select().from(rentals).where(eq(rentals.id, input.rentalId)).limit(1),
+    );
+    if (!rows.ok) return err("failed_to_load_rental", "Failed to load rental", rows.error);
 
-    const [row] = rows;
-    if (!row) return failed("rental_not_found", `Rental ${input.rentalId} not found`);
+    const [row] = rows.value;
+    if (!row) return err("rental_not_found", `Rental ${input.rentalId} not found`);
 
     return readRental(row);
   }
 
   async function getRentalByNumber(input: GetRentalByNumberInput): Promise<GetRentalResult> {
-    const { failed } = getRentalResult;
+    const { err } = getRentalResult;
 
-    const rows = await db
-      .select()
-      .from(rentals)
-      .where(eq(rentals.number, input.number))
-      .limit(1)
-      .catch(() => null);
-    if (!rows) return failed("failed_to_load_rental", "Failed to load rental");
+    const rows = await attempt(
+      db.select().from(rentals).where(eq(rentals.number, input.number)).limit(1),
+    );
+    if (!rows.ok) return err("failed_to_load_rental", "Failed to load rental", rows.error);
 
-    const [row] = rows;
-    if (!row) return failed("rental_not_found", `Rental ${input.number} not found`);
+    const [row] = rows.value;
+    if (!row) return err("rental_not_found", `Rental ${input.number} not found`);
 
     return readRental(row);
   }
 
   async function listRentals(input: ListRentalsInput): Promise<ListRentalsResult> {
-    const { success, failed } = listRentalsResult;
+    const { ok, err } = listRentalsResult;
     const { userId, status, page, pageSize } = input;
 
     const where = and(
@@ -528,8 +575,8 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
       status ? eq(rentals.status, status) : undefined,
     );
 
-    const batch = await db
-      .batch([
+    const loaded = await attempt(
+      db.batch([
         db.select({ total: count() }).from(rentals).where(where),
         db
           .select()
@@ -538,27 +585,30 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
           .orderBy(desc(rentals.createdAt), asc(rentals.id))
           .limit(pageSize)
           .offset((page - 1) * pageSize),
-      ])
-      .catch(() => null);
-    if (!batch) return failed("failed_to_list_rentals", "Failed to list rentals");
+      ]),
+    );
+    if (!loaded.ok) return err("failed_to_list_rentals", "Failed to list rentals", loaded.error);
 
-    const [[counted], rows] = batch;
+    const [[counted], rows] = loaded.value;
     const total = counted?.total ?? 0;
 
     if (rows.length === 0) {
-      return success({ items: [], total, hasMore: false });
+      return ok({ items: [], total, hasMore: false });
     }
 
     const rentalIds = rows.map((row) => row.id);
-    const itemRows = await db
-      .select()
-      .from(rentalItems)
-      .where(inArray(rentalItems.rentalId, rentalIds))
-      .orderBy(asc(rentalItems.rentalId), asc(rentalItems.position))
-      .catch(() => null);
-    if (!itemRows) return failed("failed_to_list_rentals", "Failed to list rentals");
+    const itemRows = await attempt(
+      db
+        .select()
+        .from(rentalItems)
+        .where(inArray(rentalItems.rentalId, rentalIds))
+        .orderBy(asc(rentalItems.rentalId), asc(rentalItems.position)),
+    );
+    if (!itemRows.ok) {
+      return err("failed_to_list_rentals", "Failed to list rentals", itemRows.error);
+    }
 
-    const itemsByRental = groupBy(itemRows, (row) => row.rentalId);
+    const itemsByRental = groupBy(itemRows.value, (row) => row.rentalId);
 
     // A rental that no longer fits the schema is left out rather than failing
     // the whole page, matching the catalog service's read.
@@ -568,24 +618,21 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
       return rentalSchema.safeParse(rental).success ? [rental] : [];
     });
 
-    return success({ items, total, hasMore: page * pageSize < total });
+    return ok({ items, total, hasMore: page * pageSize < total });
   }
 
   async function cancelRental(input: CancelRentalInput): Promise<CancelRentalResult> {
-    const { success, failed } = cancelRentalResult;
+    const { ok, err } = cancelRentalResult;
 
-    const rows = await db
-      .select()
-      .from(rentals)
-      .where(eq(rentals.id, input.rentalId))
-      .limit(1)
-      .catch(() => null);
-    if (!rows) return failed("failed_to_load_rental", "Failed to load rental");
+    const rows = await attempt(
+      db.select().from(rentals).where(eq(rentals.id, input.rentalId)).limit(1),
+    );
+    if (!rows.ok) return err("failed_to_load_rental", "Failed to load rental", rows.error);
 
-    const [row] = rows;
-    if (!row) return failed("rental_not_found", `Rental ${input.rentalId} not found`);
+    const [row] = rows.value;
+    if (!row) return err("rental_not_found", `Rental ${input.rentalId} not found`);
     if (!isRentalCancellable(row.status)) {
-      return failed(
+      return err(
         "rental_not_cancellable",
         `Rental ${row.number} is ${row.status} and cannot be cancelled`,
       );
@@ -596,37 +643,38 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
         ? `${row.notes}\n${input.reason}`
         : (input.reason ?? row.notes ?? null);
 
-    const updated = await db
-      .update(rentals)
-      .set({ status: "cancelled", cancelledAt: new Date(), notes })
-      .where(
-        and(
-          eq(rentals.id, input.rentalId),
-          inArray(rentals.status, [...cancellableRentalStatusValues]),
-        ),
-      )
-      .returning()
-      .catch(() => null);
-    if (!updated) return failed("failed_to_save_rental", "Failed to save rental");
+    const updated = await attempt(
+      db
+        .update(rentals)
+        .set({ status: "cancelled", cancelledAt: new Date(), notes })
+        .where(
+          and(
+            eq(rentals.id, input.rentalId),
+            inArray(rentals.status, [...cancellableRentalStatusValues]),
+          ),
+        )
+        .returning(),
+    );
+    if (!updated.ok) return err("failed_to_save_rental", "Failed to save rental", updated.error);
 
-    const cancelled = updated[0];
+    const [cancelled] = updated.value;
     // The row moved out of a cancellable status between the read and the write.
     if (!cancelled) {
-      return failed(
+      return err(
         "rental_not_cancellable",
         `Rental ${row.number} is ${row.status} and cannot be cancelled`,
       );
     }
 
-    const items = await itemsOf(cancelled.id).catch(() => null);
-    if (!items) return failed("failed_to_load_rental", "Failed to load rental");
+    const items = await attempt(itemsOf(cancelled.id));
+    if (!items.ok) return err("failed_to_load_rental", "Failed to load rental", items.error);
 
-    const rental = toRental(cancelled, items);
+    const rental = toRental(cancelled, items.value);
     if (!rentalSchema.safeParse(rental).success) {
-      return failed("rental_data_invalid", `Rental ${cancelled.id} has invalid data`);
+      return err("rental_data_invalid", `Rental ${cancelled.id} has invalid data`);
     }
 
-    return success(rental);
+    return ok(rental);
   }
 
   return {
@@ -635,5 +683,9 @@ export function createRentalService({ db }: CreateRentalServiceOptions) {
     getRentalByNumber,
     listRentals,
     cancelRental,
+    // Pure helpers, exposed on the service so apps use one surface.
+    generateRentalNumber,
+    isRentalCancellable,
+    isValidRentalPeriod,
   };
 }

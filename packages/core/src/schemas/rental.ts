@@ -1,15 +1,9 @@
 import { z } from "zod";
-import {
-  amountSchema,
-  currencyCodeSchema,
-  dateSchema,
-  dateTimeSchema,
-  imageSchema,
-  timeWindowSchema,
-  timestampsSchema,
-} from "./shared";
+import { imageSchema } from "./image";
+import { amountSchema, currencyCodeSchema } from "./money";
 import { paymentStatusSchema } from "./payment";
 import { chargeSummarySchema } from "./pricing";
+import { dateSchema, dateTimeSchema, timeWindowSchema, timestampsSchema } from "./time";
 
 export const contactSchema = z.object({
   name: z.string(),
@@ -70,10 +64,6 @@ export const cancellableRentalStatusSchema = z
 
 export type CancellableRentalStatus = z.infer<typeof cancellableRentalStatusSchema>;
 
-export function isRentalCancellable(status: RentalStatus): boolean {
-  return cancellableRentalStatusSchema.safeParse(status).success;
-}
-
 /**
  * A human-readable rental reference, e.g. `AR-2026-7KQ4M2`.
  *
@@ -119,33 +109,3 @@ export const rentalSchema = z
   .extend(timestampsSchema.shape);
 
 export type Rental = z.infer<typeof rentalSchema>;
-
-/** The unambiguous alphabet a rental number's suffix is drawn from (no 0/O, 1/I). */
-const rentalNumberAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const rentalNumberSuffixLength = 6;
-
-/**
- * A human-readable rental reference, e.g. `AR-2026-7KQ4M2`, matching
- * `rentalNumberSchema`.
- *
- * The suffix is random, not sequential, so one rental never reveals how many
- * came before it; the database's unique constraint is the final arbiter, and
- * the service retries on the rare clash. `random` and `now` are injected so the
- * function stays pure and the format can be asserted in a test.
- */
-export function generateRentalNumber(
-  now: Date = new Date(),
-  random: () => number = Math.random,
-): string {
-  const lastIndex = rentalNumberAlphabet.length - 1;
-  const suffix = Array.from({ length: rentalNumberSuffixLength }, () => {
-    // Clamp the index into range: an injected source returning exactly 1 would
-    // otherwise land one past the end and produce an empty character, yielding
-    // a short suffix that fails the pattern.
-    const index = Math.min(Math.floor(random() * rentalNumberAlphabet.length), lastIndex);
-
-    return rentalNumberAlphabet.charAt(index);
-  }).join("");
-
-  return `AR-${now.getUTCFullYear()}-${suffix}`;
-}

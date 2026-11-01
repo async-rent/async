@@ -21,9 +21,9 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
-import type { Category, Location, Product } from "../models";
-import { categorySchema, locationSchema, productSchema } from "../models";
-import { createResult, groupBy, paginationSchema } from "../utils";
+import type { Category, Location, Product, ProductPrice } from "../schemas";
+import { categorySchema, locationSchema, productSchema } from "../schemas";
+import { attempt, createResult, groupBy, paginationSchema } from "../utils";
 
 export interface CreateCatalogServiceOptions {
   db: DrizzleD1Database;
@@ -114,6 +114,41 @@ const listCategoriesResult = createResult(
 
 export const listCategoriesResultSchema = listCategoriesResult.schema;
 export type ListCategoriesResult = z.infer<typeof listCategoriesResultSchema>;
+
+/**
+ * The price a product carries in one location, or `undefined` when the location
+ * does not rent it. Pure: it only reads the product the caller already holds.
+ */
+export function priceForLocation(product: Product, locationId: string): ProductPrice | undefined {
+  return product.prices.find((price) => price.locationId === locationId);
+}
+
+/** Whether a location is open for rentals rather than announced for later. */
+export function isLocationActive(location: Pick<Location, "status">): boolean {
+  return location.status === "active";
+}
+
+/** Input to the pure `isProductRentable` check. */
+export const isProductRentableInputSchema = z.object({
+  product: productSchema,
+  locationId: z.string().optional().describe("Location to check; rentable anywhere when omitted."),
+});
+
+export type IsProductRentableInput = z.infer<typeof isProductRentableInputSchema>;
+
+/**
+ * Whether a product can be rented right now: it must be active, and when a
+ * location is named it must be priced there. Pure, so apps can gate a "Rent"
+ * button without a round trip.
+ */
+export function isProductRentable(input: IsProductRentableInput): boolean {
+  const { product, locationId } = input;
+
+  if (product.status !== "active") return false;
+  if (!locationId) return product.prices.length > 0;
+
+  return priceForLocation(product, locationId) !== undefined;
+}
 
 const rentedIn = (locationId: string): SQL => sql`exists (
   select 1 from ${productPrices}
@@ -281,7 +316,8 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     const specsOf = groupBy(specRows, (row) => row.productId);
     const pricesOf = groupBy(priceRows, (row) => row.productId);
 
-    // A product that does not fit the schema is left out instead of failing the read.
+    // A product whose stored rows do not fit the schema is left out rather than
+    // failing the whole read: one malformed row never takes the page down.
     return rows.flatMap((row) => {
       const category = categoryById.get(row.categoryId);
       if (!category) return [];
@@ -299,7 +335,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   }
 
   async function searchProducts(input: SearchProductsInput): Promise<SearchProductsResult> {
-    const { success, failed } = searchProductsResult;
+    const { ok, err } = searchProductsResult;
     const { q, categoryId, locationId, sort, page, pageSize } = input;
 
     const where = and(
@@ -310,8 +346,8 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
       ...searchWords(q).map(matchesWord),
     );
 
-    const batch = await db
-      .batch([
+    const counted = await attempt(
+      db.batch([
         db.select({ total: count() }).from(products).where(where),
         db
           .select()
@@ -320,40 +356,48 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
           .orderBy(...orderBy(sort, locationId))
           .limit(pageSize)
           .offset((page - 1) * pageSize),
-      ])
-      .catch(() => null);
-    if (!batch) return failed("failed_to_search_products", "Failed to search products");
+      ]),
+    );
+    if (!counted.ok) {
+      return err("failed_to_search_products", "Failed to search products", counted.error);
+    }
 
-    const [[counted], rows] = batch;
-    const total = counted?.total ?? 0;
+    const [[total], rows] = counted.value;
 
-    const items = await withDetails(rows).catch(() => null);
-    if (!items) return failed("failed_to_search_products", "Failed to search products");
+    const items = await attempt(withDetails(rows));
+    if (!items.ok) {
+      return err("failed_to_search_products", "Failed to search products", items.error);
+    }
 
-    return success({ items, total, hasMore: page * pageSize < total });
+    return ok({
+      items: items.value,
+      total: total?.total ?? 0,
+      hasMore: page * pageSize < (total?.total ?? 0),
+    });
   }
 
   async function findProduct(condition: SQL, key: string): Promise<GetProductResult> {
-    const { success, failed } = getProductResult;
+    const { ok, err } = getProductResult;
 
-    const rows = await db
-      .select()
-      .from(products)
-      .where(and(condition, eq(products.status, "active")))
-      .limit(1)
-      .catch(() => null);
-    if (!rows) return failed("failed_to_fetch_product", "Failed to fetch product");
+    const rows = await attempt(
+      db
+        .select()
+        .from(products)
+        .where(and(condition, eq(products.status, "active")))
+        .limit(1),
+    );
+    if (!rows.ok) return err("failed_to_fetch_product", "Failed to fetch product", rows.error);
 
-    const [row] = rows;
-    if (!row) return failed("product_not_found", `Product ${key} not found`);
+    const [row] = rows.value;
+    if (!row) return err("product_not_found", `Product ${key} not found`);
 
-    const found = await withDetails([row]).catch(() => null);
-    if (!found) return failed("failed_to_fetch_product", "Failed to fetch product");
+    const found = await attempt(withDetails([row]));
+    if (!found.ok) return err("failed_to_fetch_product", "Failed to fetch product", found.error);
 
-    const [product] = found;
-    if (!product) return failed("product_data_invalid", `Product ${key} has invalid data`);
+    const [product] = found.value;
+    if (!product) return err("product_data_invalid", `Product ${key} has invalid data`);
 
-    return success(product);
+    return ok(product);
   }
 
   function getProductById(input: GetProductByIdInput): Promise<GetProductResult> {
@@ -365,29 +409,28 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
   }
 
   async function listLocations(): Promise<ListLocationsResult> {
-    const { success, failed } = listLocationsResult;
+    const { ok, err } = listLocationsResult;
 
-    const rows = await db
-      .select()
-      .from(locations)
-      .orderBy(asc(locations.name), asc(locations.id))
-      .catch(() => null);
-    if (!rows) return failed("failed_to_list_locations", "Failed to list locations");
+    const rows = await attempt(
+      db.select().from(locations).orderBy(asc(locations.name), asc(locations.id)),
+    );
+    if (!rows.ok) return err("failed_to_list_locations", "Failed to list locations", rows.error);
 
-    return success(rows.map(toLocation));
+    return ok(rows.value.map(toLocation));
   }
 
   async function listCategories(): Promise<ListCategoriesResult> {
-    const { success, failed } = listCategoriesResult;
+    const { ok, err } = listCategoriesResult;
 
-    const rows = await db
-      .select()
-      .from(categories)
-      .orderBy(asc(categories.sortOrder), asc(categories.name), asc(categories.id))
-      .catch(() => null);
-    if (!rows) return failed("failed_to_list_categories", "Failed to list categories");
+    const rows = await attempt(
+      db
+        .select()
+        .from(categories)
+        .orderBy(asc(categories.sortOrder), asc(categories.name), asc(categories.id)),
+    );
+    if (!rows.ok) return err("failed_to_list_categories", "Failed to list categories", rows.error);
 
-    return success(rows.map(toCategory));
+    return ok(rows.value.map(toCategory));
   }
 
   return {
@@ -396,5 +439,9 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     getProductBySlug,
     listLocations,
     listCategories,
+    // Pure helpers, exposed on the service so apps use one surface.
+    isProductRentable,
+    isLocationActive,
+    priceForLocation,
   };
 }

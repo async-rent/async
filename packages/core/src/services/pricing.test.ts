@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { priceLines } from "./pricing";
+import { createPricingService, priceLines, summarizeCharge } from "./pricing";
 
 describe("priceLines", () => {
   it("sums weekly prices and deposits per unit", () => {
@@ -50,5 +50,44 @@ describe("priceLines", () => {
     });
 
     expect(summary.totalDueToday).toBe(5500);
+  });
+});
+
+describe("summarizeCharge", () => {
+  it("prices only the available lines", () => {
+    const summary = summarizeCharge({
+      currency: "USD",
+      deliveryFee: 1000,
+      lines: [
+        { weeklyPrice: 6000, quantity: 1, available: true },
+        { weeklyPrice: 12000, quantity: 1, available: false },
+      ],
+    });
+
+    expect(summary.weeklySubtotal).toBe(6000);
+    expect(summary.totalDueToday).toBe(7000);
+  });
+
+  it("owes nothing when no line is available", () => {
+    const summary = summarizeCharge({
+      currency: "USD",
+      deliveryFee: 1000,
+      lines: [{ weeklyPrice: 6000, quantity: 1, available: false }],
+    });
+
+    expect(summary.weeklySubtotal).toBe(0);
+    expect(summary.deliveryFee).toBe(0);
+    expect(summary.totalDueToday).toBe(0);
+  });
+});
+
+describe("createPricingService", () => {
+  it("exposes the pure pricing functions without a database", () => {
+    const pricing = createPricingService();
+
+    expect(pricing.priceLines({ currency: "USD", deliveryFee: 0, lines: [] }).totalDueToday).toBe(
+      0,
+    );
+    expect(pricing.summarizeCharge).toBe(summarizeCharge);
   });
 });

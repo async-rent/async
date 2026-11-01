@@ -10,23 +10,22 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
-import type { Cart, CartItem, CartLine, CartLineError } from "../models";
+import type { Cart, CartItem, CartLine, CartLineError, ProductStatus } from "../schemas";
 import {
-  cartLineError,
   cartLineErrorValues,
   cartLineQuantitySchema,
-  cartQuantityError,
   cartSchema,
-  isCartItemAvailable,
-  isLocationActive,
   maxCartLineQuantity,
   maxCartLines,
-  summarizeCart,
-} from "../models";
-import { createResult, groupBy } from "../utils";
+} from "../schemas";
+import { attempt, createResult, groupBy } from "../utils";
+import { isLocationActive } from "./catalog";
+import type { PricingService } from "./pricing";
 
 export interface CreateCartServiceOptions {
   db: DrizzleD1Database;
+  /** The pricing service the cart uses to total its lines. */
+  pricing: PricingService;
 }
 
 export const getCartByIdInputSchema = z.object({
@@ -55,20 +54,6 @@ export const clearCartInputSchema = z.object({
 });
 
 export type ClearCartInput = z.infer<typeof clearCartInputSchema>;
-
-function lineErrorMessage(
-  error: CartLineError,
-  input: { productId: string; locationId: string; stock: number | null },
-): string {
-  if (error === "product_out_of_stock") {
-    return `Only ${input.stock} of ${input.productId} available in ${input.locationId}`;
-  }
-  if (error === "cart_is_full") {
-    return `A cart holds at most ${maxCartLines} kinds of gear`;
-  }
-
-  return `Quantity must be a whole number between 0 and ${maxCartLineQuantity}`;
-}
 
 const getCartByIdResult = createResult(
   cartSchema,
@@ -105,7 +90,67 @@ const clearCartResult = createResult(z.void(), z.enum(["failed_to_save_cart"]));
 export const clearCartResultSchema = clearCartResult.schema;
 export type ClearCartResult = z.infer<typeof clearCartResultSchema>;
 
-export function createCartService({ db }: CreateCartServiceOptions) {
+/** Whether a quantity is a whole number of units the cart accepts. Pure. */
+export function cartQuantityError(quantity: number): "invalid_quantity" | null {
+  return cartLineQuantitySchema.safeParse(quantity).success ? null : "invalid_quantity";
+}
+
+/** Input to the pure `cartLineError` check. */
+export const cartLineErrorInputSchema = z.object({
+  lines: z.array(z.object({ productId: z.string(), quantity: z.number() })),
+  productId: z.string(),
+  quantity: z.number(),
+  stock: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .describe("Units available at the cart's location; null when stock is not tracked."),
+});
+
+export type CartLineErrorInput = z.infer<typeof cartLineErrorInputSchema>;
+
+/**
+ * Why a cart line cannot be written, or `null` when it can. Pure: it checks the
+ * quantity, then stock, then the whole-cart line limit, in that order, so the
+ * most specific reason wins. A zero quantity removes a line and skips the stock
+ * and limit checks.
+ */
+export function cartLineError(input: CartLineErrorInput): CartLineError | null {
+  const quantityError = cartQuantityError(input.quantity);
+  if (quantityError) return quantityError;
+  if (input.quantity === 0) return null;
+
+  if (input.stock != null && input.quantity > input.stock) return "product_out_of_stock";
+
+  const lineExists = input.lines.some((line) => line.productId === input.productId);
+  if (!lineExists && input.lines.length >= maxCartLines) return "cart_is_full";
+
+  return null;
+}
+
+/** Whether a cart line can be priced: its product is active and the city prices it. Pure. */
+export function isCartItemAvailable(status: ProductStatus, hasPrice: boolean): boolean {
+  return status === "active" && hasPrice;
+}
+
+// The user-facing message for a cart line error, kept next to the factory that
+// pairs it with the typed code.
+function lineErrorMessage(
+  error: CartLineError,
+  input: { productId: string; locationId: string; stock: number | null },
+): string {
+  if (error === "product_out_of_stock") {
+    return `Only ${input.stock} of ${input.productId} available in ${input.locationId}`;
+  }
+  if (error === "cart_is_full") {
+    return `A cart holds at most ${maxCartLines} kinds of gear`;
+  }
+
+  return `Quantity must be a whole number between 0 and ${maxCartLineQuantity}`;
+}
+
+export function createCartService({ db, pricing }: CreateCartServiceOptions) {
   const cartById = (cartId: string) =>
     db
       .select({
@@ -226,37 +271,37 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       locationId: cart.locationId,
       currency: cart.currency,
       items,
-      summary: summarizeCart({
+      summary: pricing.summarizeCharge({
         currency: cart.currency,
         deliveryFee: cart.deliveryFee,
-        items,
+        lines: items,
       }),
     };
   }
 
   async function getCartById(input: GetCartByIdInput): Promise<GetCartByIdResult> {
-    const { success, failed } = getCartByIdResult;
+    const { ok, err } = getCartByIdResult;
 
-    const batch = await db.batch([cartById(input.cartId), linesOf(input.cartId)]).catch(() => null);
-    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+    const loaded = await attempt(db.batch([cartById(input.cartId), linesOf(input.cartId)]));
+    if (!loaded.ok) return err("failed_to_load_cart", "Failed to load cart", loaded.error);
 
-    const [[cart], lines] = batch;
-    if (!cart) return failed("cart_not_found", `Cart ${input.cartId} not found`);
+    const [[cart], lines] = loaded.value;
+    if (!cart) return err("cart_not_found", `Cart ${input.cartId} not found`);
 
-    const items = await withDetails(cart.locationId, lines).catch(() => null);
-    if (!items) return failed("failed_to_load_cart", "Failed to load cart");
+    const items = await attempt(withDetails(cart.locationId, lines));
+    if (!items.ok) return err("failed_to_load_cart", "Failed to load cart", items.error);
 
-    return success(toCart(cart, items));
+    return ok(toCart(cart, items.value));
   }
 
   async function getCartByUserAndLocation(
     input: GetCartByUserAndLocationInput,
   ): Promise<GetCartByUserAndLocationResult> {
     const { userId, locationId } = input;
-    const { success, failed } = getCartByUserAndLocationResult;
+    const { ok, err } = getCartByUserAndLocationResult;
 
-    const batch = await db
-      .batch([
+    const loaded = await attempt(
+      db.batch([
         db
           .select({ currency: locations.currency, deliveryFee: locations.deliveryFee })
           .from(locations)
@@ -264,55 +309,56 @@ export function createCartService({ db }: CreateCartServiceOptions) {
           .limit(1),
         cartByScope(input),
         linesByScope(input),
-      ])
-      .catch(() => null);
-    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+      ]),
+    );
+    if (!loaded.ok) return err("failed_to_load_cart", "Failed to load cart", loaded.error);
 
-    const [[location], [cart], lines] = batch;
-    if (!location) return failed("location_not_found", `Location ${locationId} not found`);
+    const [[location], [cart], lines] = loaded.value;
+    if (!location) return err("location_not_found", `Location ${locationId} not found`);
 
     if (cart) {
-      const items = await withDetails(cart.locationId, lines).catch(() => null);
-      if (!items) return failed("failed_to_load_cart", "Failed to load cart");
+      const items = await attempt(withDetails(cart.locationId, lines));
+      if (!items.ok) return err("failed_to_load_cart", "Failed to load cart", items.error);
 
-      return success(toCart(cart, items));
+      return ok(toCart(cart, items.value));
     }
 
-    const created = await db
-      .insert(carts)
-      .values({ id: uuid(), userId, locationId })
-      .onConflictDoUpdate({
-        target: [carts.userId, carts.locationId],
-        set: { updatedAt: new Date() },
-      })
-      .returning({ id: carts.id })
-      .catch(() => null);
-    if (!created) return failed("failed_to_save_cart", "Failed to save cart");
+    const created = await attempt(
+      db
+        .insert(carts)
+        .values({ id: uuid(), userId, locationId })
+        .onConflictDoUpdate({
+          target: [carts.userId, carts.locationId],
+          set: { updatedAt: new Date() },
+        })
+        .returning({ id: carts.id }),
+    );
+    if (!created.ok) return err("failed_to_save_cart", "Failed to save cart", created.error);
 
-    const [createdCart] = created;
-    if (!createdCart) return failed("failed_to_save_cart", "Failed to save cart");
+    const [createdCart] = created.value;
+    if (!createdCart) return err("failed_to_save_cart", "Failed to save cart");
 
-    return success({
+    return ok({
       id: createdCart.id,
       userId,
       locationId,
       currency: location.currency,
       items: [],
-      summary: summarizeCart({
+      summary: pricing.summarizeCharge({
         currency: location.currency,
         deliveryFee: location.deliveryFee,
-        items: [],
+        lines: [],
       }),
     });
   }
 
   async function putItem(input: PutItemInput): Promise<PutItemResult> {
     const { cartId, productId, quantity } = input;
-    const { success, failed } = putItemResult;
+    const { ok, err } = putItemResult;
 
     const quantityError = cartQuantityError(quantity);
     if (quantityError) {
-      return failed(
+      return err(
         quantityError,
         `Quantity must be a whole number between 0 and ${maxCartLineQuantity}`,
       );
@@ -320,17 +366,18 @@ export function createCartService({ db }: CreateCartServiceOptions) {
 
     // Zero removes the line: nothing to price, nothing to write.
     if (quantity === 0) {
-      const removed = await db
-        .delete(cartItems)
-        .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)))
-        .catch(() => null);
-      if (!removed) return failed("failed_to_save_cart", "Failed to save cart");
+      const removed = await attempt(
+        db
+          .delete(cartItems)
+          .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId))),
+      );
+      if (!removed.ok) return err("failed_to_save_cart", "Failed to save cart", removed.error);
 
-      return success();
+      return ok();
     }
 
-    const batch = await db
-      .batch([
+    const loaded = await attempt(
+      db.batch([
         db
           .select({
             id: carts.id,
@@ -358,18 +405,18 @@ export function createCartService({ db }: CreateCartServiceOptions) {
           .select({ productId: cartItems.productId, quantity: cartItems.quantity })
           .from(cartItems)
           .where(eq(cartItems.cartId, cartId)),
-      ])
-      .catch(() => null);
-    if (!batch) return failed("failed_to_load_cart", "Failed to load cart");
+      ]),
+    );
+    if (!loaded.ok) return err("failed_to_load_cart", "Failed to load cart", loaded.error);
 
-    const [[cart], [offer], held] = batch;
+    const [[cart], [offer], held] = loaded.value;
 
-    if (!cart) return failed("cart_not_found", `Cart ${cartId} not found`);
+    if (!cart) return err("cart_not_found", `Cart ${cartId} not found`);
     if (!isLocationActive(cart)) {
-      return failed("location_not_available", `Location ${cart.locationId} is not open yet`);
+      return err("location_not_available", `Location ${cart.locationId} is not open yet`);
     }
     if (!offer) {
-      return failed(
+      return err(
         "product_not_available",
         `Product ${productId} is not available in ${cart.locationId}`,
       );
@@ -383,7 +430,7 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     });
 
     if (lineError) {
-      return failed(
+      return err(
         lineError,
         lineErrorMessage(lineError, {
           productId,
@@ -393,29 +440,27 @@ export function createCartService({ db }: CreateCartServiceOptions) {
       );
     }
 
-    const saved = await db
-      .insert(cartItems)
-      .values({ cartId, productId, quantity })
-      .onConflictDoUpdate({
-        target: [cartItems.cartId, cartItems.productId],
-        set: { quantity },
-      })
-      .catch(() => null);
-    if (!saved) return failed("failed_to_save_cart", "Failed to save cart");
+    const saved = await attempt(
+      db
+        .insert(cartItems)
+        .values({ cartId, productId, quantity })
+        .onConflictDoUpdate({
+          target: [cartItems.cartId, cartItems.productId],
+          set: { quantity },
+        }),
+    );
+    if (!saved.ok) return err("failed_to_save_cart", "Failed to save cart", saved.error);
 
-    return success();
+    return ok();
   }
 
   async function clearCart(input: ClearCartInput): Promise<ClearCartResult> {
-    const { success, failed } = clearCartResult;
+    const { ok, err } = clearCartResult;
 
-    const cleared = await db
-      .delete(cartItems)
-      .where(eq(cartItems.cartId, input.cartId))
-      .catch(() => null);
-    if (!cleared) return failed("failed_to_save_cart", "Failed to save cart");
+    const cleared = await attempt(db.delete(cartItems).where(eq(cartItems.cartId, input.cartId)));
+    if (!cleared.ok) return err("failed_to_save_cart", "Failed to save cart", cleared.error);
 
-    return success();
+    return ok();
   }
 
   return {
@@ -423,5 +468,9 @@ export function createCartService({ db }: CreateCartServiceOptions) {
     getCartByUserAndLocation,
     putItem,
     clearCart,
+    // Pure helpers, exposed on the service so apps use one surface.
+    cartLineError,
+    cartQuantityError,
+    isCartItemAvailable,
   };
 }
