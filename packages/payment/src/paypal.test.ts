@@ -357,8 +357,16 @@ describe("captureOrder", () => {
 describe("getOrder", () => {
   const lookup = { externalOrderId: "ORDER1" };
 
-  it.each(["CREATED", "APPROVED", "PAYER_ACTION_REQUIRED", "VOIDED"])(
-    "reports a %s order as open, since no money has moved",
+  it("reports an APPROVED order as approved, since a capture may be under way", async () => {
+    const paypal = stubPayPal({ [orderPath]: { body: { id: "ORDER1", status: "APPROVED" } } });
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toEqual({ success: true, data: { status: "approved" } });
+  });
+
+  it.each(["CREATED", "PAYER_ACTION_REQUIRED", "VOIDED"])(
+    "reports a %s order as open, since no money has moved or can",
     async (status) => {
       const paypal = stubPayPal({ [orderPath]: { body: { id: "ORDER1", status } } });
 
@@ -456,7 +464,7 @@ describe("refund", () => {
   const refundPath = "/v2/payments/captures/CAPTURE1/refund";
   const input = { externalPaymentId: "CAPTURE1", amount: 37000, currency: "USD" };
 
-  it("returns the amount to the customer once per capture", async () => {
+  it("returns what the capture has left to the customer, once per capture", async () => {
     const paypal = stubPayPal({
       [refundPath]: { status: 201, body: { id: "REFUND1", status: "COMPLETED" } },
     });
@@ -466,7 +474,8 @@ describe("refund", () => {
     expect(result).toEqual({ success: true });
 
     const sent = paypal.sentTo(refundPath);
-    expect(sent.body).toEqual({ amount: { currency_code: "USD", value: "370.00" } });
+    // No amount, so a capture already partly refunded at PayPal is refunded in full.
+    expect(sent.body).toEqual({});
     expect(sent.headers.get("PayPal-Request-Id")).toBe("refund-CAPTURE1");
   });
 

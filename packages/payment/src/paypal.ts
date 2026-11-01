@@ -297,7 +297,7 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     if (captureRefused && reply.failure.issue === "ORDER_ALREADY_CAPTURED") {
       const order = await readOrder(externalOrderId);
       if (!order.success) return order;
-      if (order.data.status === "open") {
+      if (order.data.status === "open" || order.data.status === "approved") {
         return err("provider_response_invalid", `PayPal order ${externalOrderId} has no capture`);
       }
 
@@ -357,6 +357,8 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     if (order.data.status === "COMPLETED") {
       return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
     }
+    // Approved is the only state a capture starts from, so one may be running.
+    if (order.data.status === "APPROVED") return ok({ status: "approved" });
 
     return ok({ status: "open" });
   }
@@ -385,16 +387,13 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     const parsed = refundProviderPaymentInputSchema.safeParse(input);
     if (!parsed.success) return err("invalid_request", "Invalid PayPal refund", parsed.error);
 
-    const { externalPaymentId, amount, currency } = parsed.data;
-    const value = toPayPalAmount(amount, currency);
-    if (!value.success) return value;
+    const { externalPaymentId } = parsed.data;
 
+    // No amount: PayPal then refunds what the capture has left, so a capture
+    // already partly refunded at PayPal is still refunded in full here.
     const reply = await call(
       `/v2/payments/captures/${encodeURIComponent(externalPaymentId)}/refund`,
-      {
-        body: { amount: value.data },
-        requestId: `refund-${externalPaymentId}`,
-      },
+      { body: {}, requestId: `refund-${externalPaymentId}` },
     );
     // Already refunded in full is the state we asked for.
     if (reply.kind === "refused" && reply.failure.issue === "CAPTURE_FULLY_REFUNDED") return ok();
@@ -518,8 +517,9 @@ function toCaptureResult(capture: Capture): CaptureProviderOrderResult {
     return err("payment_pending", `PayPal capture ${capture.id} is PENDING${reason}`);
   }
 
-  // Any other status is not one PayPal documents. Reading it as pending would
-  // block the payment for good, so it fails as a reply we do not understand.
+  // Any other status is not one PayPal documents. It still blocks the payment,
+  // as pending would, but as a reply we do not understand, so it reads as a
+  // fault to look into rather than money on hold.
   return err(
     "provider_response_invalid",
     `PayPal capture ${capture.id} is ${capture.status}${reason}`,

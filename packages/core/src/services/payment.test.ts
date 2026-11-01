@@ -244,6 +244,44 @@ describe("startPayment", () => {
     expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
   });
 
+  it("captures an approved first order instead of replacing it, so it is never paid twice", async () => {
+    const s = setup();
+    await start(s);
+    s.getOrder.mockResolvedValueOnce(getProviderOrderResult.ok({ status: "approved" }));
+
+    const result = await s.service.startPayment({
+      rentalId: "rental_1",
+      provider: "paypal",
+      ...urls,
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: "payment_already_started" } });
+    expect(s.captureOrder).toHaveBeenCalledWith({ externalOrderId: "order_1" });
+    expect(s.createOrder).toHaveBeenCalledTimes(1);
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "succeeded" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
+  it("opens a fresh order once an approved first order is declined", async () => {
+    const s = setup();
+    await start(s);
+    s.getOrder.mockResolvedValueOnce(getProviderOrderResult.ok({ status: "approved" }));
+    s.captureOrder.mockResolvedValueOnce(
+      captureProviderOrderResult.ok({ status: "failed", failureReason: "INSTRUMENT_DECLINED" }),
+    );
+
+    const result = await s.service.startPayment({
+      rentalId: "rental_1",
+      provider: "paypal",
+      ...urls,
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: { payment: { externalOrderId: "order_2", status: "pending" } },
+    });
+  });
+
   it("keeps the first order when the provider cannot say where it stands", async () => {
     const s = setup();
     await start(s);
@@ -396,9 +434,78 @@ describe("confirmPayment", () => {
 
     const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
 
-    expect(result).toMatchObject({ success: false, error: { code: "failed_to_save_payment" } });
+    expect(result).toMatchObject({ success: false, error: { code: "payment_replaced" } });
     expect(s.paymentRow()).toEqual({ externalOrderId: "order_2", status: "pending" });
     expect(s.rentalRow("rental_1")).toEqual({ status: "pending_payment", paymentStatus: null });
+  });
+
+  it("records a late capture even after the replacing order was declined", async () => {
+    const s = setup();
+    const externalOrderId = await start(s);
+    s.captureOrder.mockImplementationOnce(async () => {
+      await s.service.startPayment({ rentalId: "rental_1", provider: "paypal", ...urls });
+      s.captureOrder.mockResolvedValueOnce(
+        captureProviderOrderResult.ok({ status: "failed", failureReason: "INSTRUMENT_DECLINED" }),
+      );
+      await s.service.confirmPayment({ provider: "paypal", externalOrderId: "order_2" });
+
+      return captureProviderOrderResult.ok({
+        status: "succeeded",
+        externalPaymentId: "capture_order_1",
+      });
+    });
+
+    const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: { externalOrderId: "order_1", status: "succeeded", failureReason: undefined },
+    });
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "succeeded" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
+  it("flags a late capture when the replacing order was already paid", async () => {
+    const s = setup();
+    const externalOrderId = await start(s);
+    s.captureOrder.mockImplementationOnce(async () => {
+      await s.service.startPayment({ rentalId: "rental_1", provider: "paypal", ...urls });
+      await s.service.confirmPayment({ provider: "paypal", externalOrderId: "order_2" });
+
+      return captureProviderOrderResult.ok({
+        status: "succeeded",
+        externalPaymentId: "capture_order_1",
+      });
+    });
+
+    const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: "payment_replaced", message: expect.stringContaining("capture_order_1") },
+    });
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_2", status: "succeeded" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
+  it("returns the payment when another request settled the same order first", async () => {
+    const s = setup();
+    const externalOrderId = await start(s);
+    s.captureOrder.mockImplementationOnce(async () => {
+      await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+      return captureProviderOrderResult.ok({
+        status: "succeeded",
+        externalPaymentId: "capture_order_1",
+      });
+    });
+
+    const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: { externalOrderId: "order_1", status: "succeeded" },
+    });
   });
 
   it("records a late capture on the order that took the money, even after a restart", async () => {
