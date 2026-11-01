@@ -89,7 +89,9 @@ export type CaptureProviderOrderResult = z.infer<typeof captureProviderOrderResu
 export const providerOrderStateSchema = z.discriminatedUnion("status", [
   z
     .object({ status: z.literal("open") })
-    .describe("No money has moved and none can: the order is unapproved, expired or void."),
+    .describe(
+      "No money has moved: the order is unapproved, expired or void. Only a capture takes money, and nothing captures an order its payment no longer points at, so it is safe to replace.",
+    ),
   z
     .object({ status: z.literal("approved") })
     .describe(
@@ -169,6 +171,12 @@ export type StartPaymentInput = z.infer<typeof startPaymentInputSchema>;
 export const confirmPaymentInputSchema = z.object({
   provider: paymentProviderSchema.describe("Provider that called back."),
   externalOrderId: z.string().describe("Provider-side order the customer approved."),
+  rentalId: z
+    .string()
+    .optional()
+    .describe(
+      "Rental the order was opened for, e.g. carried in the return URL. When the order was replaced, the rental's settled payment is returned instead of payment_not_found.",
+    ),
 });
 
 export type ConfirmPaymentInput = z.infer<typeof confirmPaymentInputSchema>;
@@ -186,15 +194,20 @@ export const listPaymentsInputSchema = z.object({
 export type ListPaymentsInput = z.infer<typeof listPaymentsInputSchema>;
 
 const startPaymentResult = createResult(
-  z.object({
-    payment: paymentSchema,
-    approvalUrl: z
-      .url()
-      .optional()
+  z.discriminatedUnion("status", [
+    z
+      .object({
+        status: z.literal("awaiting_approval"),
+        payment: paymentSchema,
+        approvalUrl: z.url().describe("Where to send the customer to approve the charge."),
+      })
+      .describe("A fresh order the customer still has to approve."),
+    z
+      .object({ status: z.literal("paid"), payment: paymentSchema })
       .describe(
-        "Where to send the customer to approve the charge. Absent when an order the customer had already approved was captured instead, so the payment is settled and there is nothing to approve.",
+        "An earlier order the customer had approved was captured instead, so the rental is paid and there is nothing to approve.",
       ),
-  }),
+  ]),
   z.enum([
     "provider_not_configured",
     "rental_not_found",
@@ -267,16 +280,19 @@ const settlePaymentResult = createResult(
   ]),
 );
 
-/**
- * The `cause` of a `payment_captured_twice` failure: the second charge, which
- * no payment row records, so it can be refunded at the provider.
- */
-export interface DuplicateCapture {
-  paymentId: string;
-  provider: PaymentProvider;
-  externalOrderId: string;
-  externalPaymentId: string;
-}
+export const duplicateCaptureSchema = z
+  .object({
+    paymentId: z.string().describe("Payment another order already paid."),
+    provider: paymentProviderSchema,
+    externalOrderId: z.string().describe("Order that took the second charge."),
+    externalPaymentId: z.string().describe("The second charge, to refund at the provider."),
+    refundError: z.unknown().describe("Why refunding the second charge automatically failed."),
+  })
+  .describe(
+    "The `cause` of a `payment_captured_twice` failure: a second charge no payment row records, which could not be refunded automatically and must be refunded at the provider.",
+  );
+
+export type DuplicateCapture = z.infer<typeof duplicateCaptureSchema>;
 
 type SettlePaymentResult = z.infer<typeof settlePaymentResult.schema>;
 
@@ -323,9 +339,9 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
    * fresh order on the same payment row, because a rental has one row per cycle.
    *
    * An earlier order the customer already approved is captured first. If it
-   * turns out to be paid, the payment is recorded and returned without an
-   * `approvalUrl`: callers should then show the rental as paid instead of
-   * sending the customer to the provider.
+   * turns out to be paid, the payment is recorded and returned as `paid`:
+   * callers should then show the rental as paid instead of sending the
+   * customer to the provider.
    */
   async function startPayment(input: StartPaymentInput): Promise<StartPaymentResult> {
     const { ok, err } = startPaymentResult;
@@ -390,11 +406,11 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       }
 
       if (previous.data.status === "succeeded") {
-        const settled = await settle(existing, previous.data);
+        const settled = await settle(previousAdapter, existing, previous.data);
         if (!settled.success) return settled;
 
         // Already paid, so there is nothing for the customer to approve.
-        return ok({ payment: settled.data });
+        return ok({ status: "paid", payment: settled.data });
       }
     }
 
@@ -445,13 +461,18 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     const payment = parsePayment(row);
     if (!payment) return err("payment_data_invalid", `Payment ${row.id} has invalid data`);
 
-    return ok({ payment, approvalUrl: order.data.approvalUrl });
+    return ok({ status: "awaiting_approval", payment, approvalUrl: order.data.approvalUrl });
   }
 
   /**
    * Settles a payment once the customer is back from the provider. The order
    * id is what a provider callback carries, so that is what it resolves on. A
    * replayed callback finds the payment already settled and returns it as is.
+   *
+   * An order no payment points at any more (the customer opened a newer one,
+   * or an earlier order's late capture paid the rental) is never captured, so
+   * it takes no money. With `rentalId`, the customer then sees the rental's
+   * settled payment, or `payment_replaced` while a newer order is open.
    */
   async function confirmPayment(input: ConfirmPaymentInput): Promise<ConfirmPaymentResult> {
     const { ok, err } = confirmPaymentResult;
@@ -476,7 +497,11 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     if (!rows.ok) return err("failed_to_load_payment", "Failed to load payment", rows.error);
 
     const [row] = rows.value;
-    if (!row) return err("payment_not_found", `Order ${input.externalOrderId} not found`);
+    if (!row) {
+      return input.rentalId
+        ? confirmReplacedOrder(input.externalOrderId, input.rentalId)
+        : err("payment_not_found", `Order ${input.externalOrderId} not found`);
+    }
 
     if (row.status !== "pending") {
       const payment = parsePayment(row);
@@ -493,7 +518,38 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
         : err("provider_request_failed", "The payment provider failed", captured.error);
     }
 
-    return settle(row, captured.data);
+    return settle(adapter, row, captured.data);
+  }
+
+  // A confirm for an order the rental's payment no longer points at. Nothing
+  // is captured: the rental's payment is returned once settled.
+  async function confirmReplacedOrder(
+    externalOrderId: string,
+    rentalId: string,
+  ): Promise<ConfirmPaymentResult> {
+    const { ok, err } = confirmPaymentResult;
+
+    const rows = await attempt(
+      db
+        .select()
+        .from(payments)
+        .where(and(eq(payments.rentalId, rentalId), eq(payments.billingCycle, firstBillingCycle)))
+        .limit(1),
+    );
+    if (!rows.ok) return err("failed_to_load_payment", "Failed to load payment", rows.error);
+
+    const [row] = rows.value;
+    if (!row) return err("payment_not_found", `Order ${externalOrderId} not found`);
+    if (row.status !== "succeeded" && row.status !== "refunded") {
+      return err(
+        "payment_replaced",
+        `Order ${externalOrderId} was replaced by order ${row.externalOrderId}`,
+      );
+    }
+
+    const payment = parsePayment(row);
+
+    return payment ? ok(payment) : err("payment_data_invalid", `Payment ${row.id} is invalid`);
   }
 
   /**
@@ -505,11 +561,17 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
    * answered. Money taken is recorded anyway, on the order that took it, even
    * over a decline of the newer order. A decline only counts for its own
    * order, so a newer one the customer opened stays as it is
-   * (`payment_replaced`). Money taken after another order already paid fails
-   * with `payment_captured_twice`, whose cause is the `DuplicateCapture` to
-   * refund.
+   * (`payment_replaced`). Money taken after another order already paid is a
+   * second charge no row records, so it is refunded through `adapter` and the
+   * payment that stands is returned. Only if that refund does not complete
+   * does it fail with `payment_captured_twice`, whose cause is the
+   * `DuplicateCapture` to refund by hand.
    */
-  async function settle(row: PaymentRow, outcome: CaptureOutcome): Promise<SettlePaymentResult> {
+  async function settle(
+    adapter: PaymentProviderAdapter,
+    row: PaymentRow,
+    outcome: CaptureOutcome,
+  ): Promise<SettlePaymentResult> {
     const { ok, err } = settlePaymentResult;
 
     const now = new Date();
@@ -600,20 +662,25 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
         );
       }
 
-      // Money no row records: the customer paid twice, so the cause names
-      // the second charge for a refund at the provider.
-      const duplicate: DuplicateCapture = {
-        paymentId: row.id,
-        provider: row.provider,
-        externalOrderId: row.externalOrderId,
-        externalPaymentId: outcome.externalPaymentId,
-      };
+      // Money no row records: the customer paid twice, so the second charge
+      // goes straight back. The provider keys the refund on the charge, so a
+      // retried refund never returns it twice.
+      const refunded = await adapter.refund({ externalPaymentId: outcome.externalPaymentId });
+      if (!refunded.success) {
+        const duplicate: DuplicateCapture = {
+          paymentId: row.id,
+          provider: row.provider,
+          externalOrderId: row.externalOrderId,
+          externalPaymentId: outcome.externalPaymentId,
+          refundError: refunded.error,
+        };
 
-      return err(
-        "payment_captured_twice",
-        `Order ${row.externalOrderId} took payment ${outcome.externalPaymentId}, but payment ${row.id} was already paid by order ${current.externalOrderId}; refund it at the provider`,
-        duplicate,
-      );
+        return err(
+          "payment_captured_twice",
+          `Order ${row.externalOrderId} took payment ${outcome.externalPaymentId}, but payment ${row.id} was already paid by order ${current.externalOrderId}, and refunding it failed; refund it at the provider`,
+          duplicate,
+        );
+      }
     }
 
     const payment = parsePayment(current);

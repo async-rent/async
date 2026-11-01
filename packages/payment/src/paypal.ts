@@ -331,7 +331,7 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
 
     // The reply may be a replay of a capture made up to 6 hours ago, which
     // has since been refunded, so it is read fresh unless it can no longer change.
-    return toCaptureResult(await readLatestCapture(first, changeableCaptureStatuses));
+    return readLatestCapture(first, changeableCaptureStatuses);
   }
 
   async function getOrder(input: GetProviderOrderInput): Promise<GetProviderOrderResult> {
@@ -366,7 +366,7 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
 
     const first = toFirstCapture(order.data);
     // The order was just read, so only a held capture is worth asking about again.
-    if (first) return toCaptureResult(await readLatestCapture(first, pendingCaptureStatuses));
+    if (first) return readLatestCapture(first, pendingCaptureStatuses);
     // A completed order always carries its capture, so one without is not a shape we know.
     if (order.data.status === "COMPLETED") {
       return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
@@ -378,24 +378,33 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
   }
 
   /**
-   * A capture in one of `refresh` read straight from PayPal, so a retried
-   * confirm sees it settle or be refunded whatever the idempotent capture
-   * replays. Any other capture, or a read that fails, keeps what PayPal said.
+   * The outcome of a capture, one in `refresh` read straight from PayPal so a
+   * retried confirm sees it settle or be refunded whatever the idempotent
+   * capture replays. When that read fails, a pending capture stays pending,
+   * which leaves the payment as it is. A taken one fails instead: the replay
+   * may report money PayPal has refunded since, and a retry reads it again.
    */
   async function readLatestCapture(
     capture: Capture,
     refresh: ReadonlySet<string>,
-  ): Promise<Capture> {
-    if (!refresh.has(capture.status)) return capture;
+  ): Promise<CaptureProviderOrderResult> {
+    const { err } = captureProviderOrderResult;
+
+    if (!refresh.has(capture.status)) return toCaptureResult(capture);
 
     const reply = await call(`/v2/payments/captures/${encodeURIComponent(capture.id)}`, {
       method: "GET",
     });
-    if (reply.kind !== "answered") return capture;
+    const latest = reply.kind === "answered" ? captureSchema.safeParse(reply.body) : undefined;
+    if (latest?.success && latest.data.id === capture.id) return toCaptureResult(latest.data);
+    if (capture.status === "PENDING") return toCaptureResult(capture);
+    if (reply.kind !== "answered") return err(...toReplyError("read the capture", reply));
 
-    const latest = captureSchema.safeParse(reply.body);
-
-    return latest.success && latest.data.id === capture.id ? latest.data : capture;
+    return err(
+      "provider_response_invalid",
+      `PayPal sent an unexpected capture for ${capture.id}`,
+      latest?.error,
+    );
   }
 
   async function refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult> {

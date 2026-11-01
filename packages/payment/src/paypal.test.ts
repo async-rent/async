@@ -252,7 +252,7 @@ describe("captureOrder", () => {
     });
   });
 
-  it("keeps the captured answer when the fresh read fails", async () => {
+  it("fails when a taken capture cannot be read fresh, since the replay may be refunded", async () => {
     const paypal = stubPayPal({
       [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
       [capturePathById]: { status: 503 },
@@ -260,10 +260,33 @@ describe("captureOrder", () => {
 
     const result = await paypal.adapter.captureOrder(capture);
 
-    expect(result).toEqual({
-      success: true,
-      data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
+    expect(result).toMatchObject(
+      failure("provider_refused", "PayPal could not read the capture [503]"),
+    );
+  });
+
+  it("fails when a taken capture reads back in a shape it does not know", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
+      [capturePathById]: { body: { id: "CAPTURE2", status: "REFUNDED" } },
     });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toMatchObject(
+      failure("provider_response_invalid", "PayPal sent an unexpected capture for CAPTURE1"),
+    );
+  });
+
+  it("keeps a pending capture pending when it cannot be read fresh", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "PENDING" }) },
+      [capturePathById]: { status: 503 },
+    });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toMatchObject(failure("payment_pending", "PayPal capture CAPTURE1 is PENDING"));
   });
 
   it("does not read a declined capture again, since it can no longer change", async () => {
