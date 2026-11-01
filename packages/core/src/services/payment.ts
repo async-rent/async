@@ -5,33 +5,55 @@ import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import type { Payment, PaymentProvider } from "../schemas";
-import { paymentProviderSchema, paymentSchema } from "../schemas";
+import { amountSchema, currencyCodeSchema, paymentProviderSchema, paymentSchema } from "../schemas";
 import { attempt, createResult } from "../utils";
+
+export const createProviderOrderInputSchema = z.object({
+  reference: z
+    .string()
+    .describe("Rental reference to show on the provider's checkout, e.g. AR-2026-7KQ4M2."),
+  amount: amountSchema.describe("Amount to charge, in the currency's minor unit."),
+  currency: currencyCodeSchema,
+  returnUrl: z.url().describe("Where the provider sends the customer after approving."),
+  cancelUrl: z.url().describe("Where the provider sends the customer after backing out."),
+});
+
+export type CreateProviderOrderInput = z.infer<typeof createProviderOrderInputSchema>;
+
+export const captureProviderOrderInputSchema = z.object({
+  externalOrderId: z.string().describe("Provider-side order the customer approved."),
+});
+
+export type CaptureProviderOrderInput = z.infer<typeof captureProviderOrderInputSchema>;
+
+export const refundProviderPaymentInputSchema = z.object({
+  externalPaymentId: z.string().describe("Provider-side payment to return."),
+  amount: amountSchema.describe("Amount to return, in the currency's minor unit."),
+  currency: currencyCodeSchema,
+});
+
+export type RefundProviderPaymentInput = z.infer<typeof refundProviderPaymentInputSchema>;
 
 /**
  * What a payment company must do for the payment service. The service only
  * talks to this interface, so adding a provider means writing one adapter and
- * registering it by name; nothing here changes.
+ * registering it by name; nothing here changes. Each method's input has a
+ * schema above, so an adapter can validate what it receives.
  *
  * An adapter throws when the provider cannot be reached. A charge the provider
  * refuses is not an error: `captureOrder` reports it as a `failed` outcome.
  */
 export interface PaymentProviderAdapter {
   /** Opens a charge at the provider and returns where the customer approves it. */
-  createOrder(input: {
-    /** Rental reference to show on the provider's checkout, e.g. AR-2026-7KQ4M2. */
-    reference: string;
-    amount: number;
-    currency: string;
-    returnUrl: string;
-    cancelUrl: string;
-  }): Promise<{ externalOrderId: string; approvalUrl: string }>;
+  createOrder(
+    input: CreateProviderOrderInput,
+  ): Promise<{ externalOrderId: string; approvalUrl: string }>;
 
   /** Takes the money once the customer has approved the order. */
-  captureOrder(input: { externalOrderId: string }): Promise<CaptureOutcome>;
+  captureOrder(input: CaptureProviderOrderInput): Promise<CaptureOutcome>;
 
   /** Returns a settled charge to the customer in full. */
-  refund(input: { externalPaymentId: string; amount: number; currency: string }): Promise<void>;
+  refund(input: RefundProviderPaymentInput): Promise<void>;
 }
 
 export type CaptureOutcome =
