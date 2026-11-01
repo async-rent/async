@@ -1,12 +1,16 @@
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { createCartService } from "./services/cart";
 import { createCatalogService } from "./services/catalog";
+import { createPaymentService } from "./services/payment";
+import type { PaymentProviders } from "./services/payment";
 import { createPricingService } from "./services/pricing";
 import { createRentalService } from "./services/rental";
 
 export interface CreateAsyncOptions {
   /** The D1 database the services read and write through. */
   db: DrizzleD1Database;
+  /** Payment provider adapters by name. Starting a payment with one that is missing fails. */
+  paymentProviders?: PaymentProviders;
 }
 
 /**
@@ -28,13 +32,14 @@ export interface CreateAsyncOptions {
  * `async` instance can serve a whole request. Validation stays at the consumer:
  * core exports the schemas, and the consumer parses input before it calls in.
  */
-export function createAsync({ db }: CreateAsyncOptions) {
+export function createAsync({ db, paymentProviders = {} }: CreateAsyncOptions) {
   const pricing = createPricingService();
 
   return {
     catalog: createCatalogService({ db }),
     cart: createCartService({ db, pricing }),
     rental: createRentalService({ db, pricing }),
+    payment: createPaymentService({ db, providers: paymentProviders }),
     pricing,
   };
 }
