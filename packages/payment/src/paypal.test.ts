@@ -108,7 +108,6 @@ describe("createOrder", () => {
 
   it.each([
     { amount: 5, currency: "USD", value: "0.05" },
-    { amount: 0, currency: "USD", value: "0.00" },
     { amount: 123456, currency: "EUR", value: "1234.56" },
     { amount: 4500, currency: "JPY", value: "4500" },
     { amount: 150000, currency: "HUF", value: "1500" },
@@ -126,6 +125,7 @@ describe("createOrder", () => {
   it.each([
     { name: "a fractional amount PayPal only takes whole", currency: "HUF", amount: 150050 },
     { name: "a currency PayPal does not accept", currency: "IDR", amount: 37000 },
+    { name: "a zero amount PayPal would refuse", currency: "USD", amount: 0 },
     { name: "input that breaks the provider contract", currency: "USD", amount: -1 },
   ])("refuses $name before calling PayPal", async ({ currency, amount }) => {
     const paypal = stubPayPal({});

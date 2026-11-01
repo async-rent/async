@@ -122,30 +122,24 @@ const createdOrderSchema = z.object({
 
 const statusDetailsSchema = z.object({ reason: z.string() }).optional();
 
+const captureSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  status_details: statusDetailsSchema,
+});
+
+type Capture = z.infer<typeof captureSchema>;
+
 const capturedOrderSchema = z.object({
   id: z.string(),
   purchase_units: z
     .array(
       z.object({
-        payments: z
-          .object({
-            captures: z
-              .array(
-                z.object({
-                  id: z.string(),
-                  status: z.string(),
-                  status_details: statusDetailsSchema,
-                }),
-              )
-              .default([]),
-          })
-          .optional(),
+        payments: z.object({ captures: z.array(captureSchema).default([]) }).optional(),
       }),
     )
     .default([]),
 });
-
-type CapturedOrder = z.infer<typeof capturedOrderSchema>;
 
 const refundSchema = z.object({
   id: z.string(),
@@ -178,7 +172,8 @@ type PayPalReply =
 
 type FailedReply = Exclude<PayPalReply, { kind: "answered" }>;
 
-interface PostOptions {
+interface CallOptions {
+  method?: "GET" | "POST";
   body?: unknown;
   /** PayPal's idempotency key: a repeat with the same key returns the first reply. */
   requestId?: string;
@@ -198,8 +193,9 @@ interface PostOptions {
  *
  * Every method returns a result and never throws. Capture and refund send an
  * idempotency key derived from the PayPal id, so a retried confirm or refund
- * replays PayPal's first answer instead of moving money twice. Every call
- * fetches a fresh access token; nothing is cached.
+ * replays PayPal's first answer instead of moving money twice. A capture that
+ * comes back pending is read again by its id, so a later confirm sees it
+ * settle. Every call fetches a fresh access token; nothing is cached.
  */
 export function createPayPalAdapter(options: CreatePayPalAdapterOptions): PaymentProviderAdapter {
   const baseUrl = baseUrls[options.environment ?? "sandbox"];
@@ -207,7 +203,8 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
   const credentials = toBasicCredentials(options.clientId, options.clientSecret);
 
   async function request(url: string, init: RequestInit): Promise<PayPalReply> {
-    const sent = await attempt(send(url, init));
+    // Called inside `then` so a `fetch` that throws synchronously still lands in `attempt`.
+    const sent = await attempt(Promise.resolve().then(() => send(url, init)));
     if (!sent.ok) return { kind: "unreachable", cause: sent.error };
 
     // An empty or non-JSON body reads as `undefined`; the schemas decide if that is fine.
@@ -218,7 +215,10 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     return { kind: "refused", failure: toFailure(sent.value.status, body) };
   }
 
-  async function post(path: string, { body, requestId }: PostOptions = {}): Promise<PayPalReply> {
+  async function call(
+    path: string,
+    { method = "POST", body, requestId }: CallOptions = {},
+  ): Promise<PayPalReply> {
     const token = await request(`${baseUrl}/v1/oauth2/token`, {
       method: "POST",
       headers: {
@@ -234,7 +234,7 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     if (!parsed.success) return { kind: "unexpected", cause: parsed.error };
 
     return request(`${baseUrl}${path}`, {
-      method: "POST",
+      method,
       headers: {
         Authorization: `Bearer ${parsed.data.access_token}`,
         "Content-Type": "application/json",
@@ -254,7 +254,7 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     const amount = toPayPalAmount(order.data.amount, order.data.currency);
     if (!amount.success) return amount;
 
-    const reply = await post("/v2/checkout/orders", { body: toOrderBody(order.data, amount.data) });
+    const reply = await call("/v2/checkout/orders", { body: toOrderBody(order.data, amount.data) });
     if (reply.kind !== "answered") return err(...toReplyError("create the order", reply));
 
     const created = createdOrderSchema.safeParse(reply.body);
@@ -279,11 +279,13 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     if (!capture.success) return err("invalid_request", "Invalid PayPal capture", capture.error);
 
     const { externalOrderId } = capture.data;
-    const reply = await post(`/v2/checkout/orders/${encodeURIComponent(externalOrderId)}/capture`, {
+    const reply = await call(`/v2/checkout/orders/${encodeURIComponent(externalOrderId)}/capture`, {
       requestId: `capture-${externalOrderId}`,
     });
 
-    const declined = reply.kind === "refused" ? toDeclineReason(reply.failure) : undefined;
+    // Only the capture itself can decline; a failed sign-in is never the customer's to fix.
+    const declined =
+      reply.kind === "refused" && !reply.step ? toDeclineReason(reply.failure) : undefined;
     if (declined) return ok({ status: "failed", failureReason: declined });
     if (reply.kind !== "answered") return err(...toReplyError("capture the order", reply));
 
@@ -292,7 +294,29 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
       return err("provider_response_invalid", "PayPal sent an unexpected capture", order.error);
     }
 
-    return toCaptureResult(order.data);
+    const [first] = order.data.purchase_units.flatMap((unit) => unit.payments?.captures ?? []);
+    if (!first)
+      return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
+
+    return toCaptureResult(await readLatestCapture(first));
+  }
+
+  /**
+   * A pending capture read straight from PayPal, so a retried confirm sees it
+   * settle whatever the idempotent capture replays. Any capture that is not
+   * pending, or a read that fails, keeps what the capture call said.
+   */
+  async function readLatestCapture(capture: Capture): Promise<Capture> {
+    if (capture.status !== "PENDING") return capture;
+
+    const reply = await call(`/v2/payments/captures/${encodeURIComponent(capture.id)}`, {
+      method: "GET",
+    });
+    if (reply.kind !== "answered") return capture;
+
+    const latest = captureSchema.safeParse(reply.body);
+
+    return latest.success && latest.data.id === capture.id ? latest.data : capture;
   }
 
   async function refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult> {
@@ -305,7 +329,7 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     const value = toPayPalAmount(amount, currency);
     if (!value.success) return value;
 
-    const reply = await post(
+    const reply = await call(
       `/v2/payments/captures/${encodeURIComponent(externalPaymentId)}/refund`,
       {
         body: { amount: value.data },
@@ -390,11 +414,8 @@ function toDeclineReason(failure: PayPalFailure): string | undefined {
 }
 
 // Pure.
-function toCaptureResult(order: CapturedOrder): CaptureProviderOrderResult {
+function toCaptureResult(capture: Capture): CaptureProviderOrderResult {
   const { ok, err } = captureProviderOrderResult;
-
-  const [capture] = order.purchase_units.flatMap((unit) => unit.payments?.captures ?? []);
-  if (!capture) return err("provider_response_invalid", `PayPal order ${order.id} has no capture`);
 
   const reason = toReasonSuffix(capture.status_details);
   if (capture.status === "COMPLETED") {
@@ -453,6 +474,9 @@ function toPayPalAmount(amount: number, currency: string): PayPalAmountResult {
 
   const digits = currencyDigits.get(currency);
   if (digits === undefined) return err("invalid_request", `PayPal does not accept ${currency}`);
+  // PayPal refuses a zero charge or refund, so say so before asking it.
+  if (amount <= 0)
+    return err("invalid_request", `PayPal needs an amount above zero, got ${amount}`);
 
   const minor = String(amount).padStart(digits + 1, "0");
   const whole = digits === 0 ? minor : minor.slice(0, -digits);
