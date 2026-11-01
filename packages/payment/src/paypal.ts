@@ -501,16 +501,29 @@ function toCaptureResult(capture: Capture): CaptureProviderOrderResult {
   const { ok, err } = captureProviderOrderResult;
 
   const reason = toReasonSuffix(capture.status_details);
-  if (capture.status === "COMPLETED") {
+  // A partial refund made at PayPal leaves the rest of the money taken.
+  if (capture.status === "COMPLETED" || capture.status === "PARTIALLY_REFUNDED") {
     return ok({ status: "succeeded", externalPaymentId: capture.id });
   }
   if (capture.status === "DECLINED" || capture.status === "FAILED") {
     return ok({ status: "failed", failureReason: `PayPal declined the payment${reason}.` });
   }
-
+  // Refunded in full at PayPal, so no money is held and the customer can pay again.
+  if (capture.status === "REFUNDED") {
+    return ok({ status: "failed", failureReason: "PayPal refunded the payment." });
+  }
   // PENDING (held for review, or an eCheck clearing) has not moved the money
   // yet, so it is neither outcome. Failing the call leaves the payment pending.
-  return err("payment_pending", `PayPal capture ${capture.id} is ${capture.status}${reason}`);
+  if (capture.status === "PENDING") {
+    return err("payment_pending", `PayPal capture ${capture.id} is PENDING${reason}`);
+  }
+
+  // Any other status is not one PayPal documents. Reading it as pending would
+  // block the payment for good, so it fails as a reply we do not understand.
+  return err(
+    "provider_response_invalid",
+    `PayPal capture ${capture.id} is ${capture.status}${reason}`,
+  );
 }
 
 // Pure.

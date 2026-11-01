@@ -378,6 +378,48 @@ describe("confirmPayment", () => {
     expect(result).toMatchObject({ success: false, error: { code: "provider_not_configured" } });
   });
 
+  // The customer restarts checkout while the first order's capture is in flight.
+  const restartDuringCapture = (
+    s: Setup,
+    outcome: Parameters<typeof captureProviderOrderResult.ok>[0],
+  ) =>
+    s.captureOrder.mockImplementationOnce(async () => {
+      await s.service.startPayment({ rentalId: "rental_1", provider: "paypal", ...urls });
+
+      return captureProviderOrderResult.ok(outcome);
+    });
+
+  it("ignores a late decline for an order the customer already replaced", async () => {
+    const s = setup();
+    const externalOrderId = await start(s);
+    restartDuringCapture(s, { status: "failed", failureReason: "INSTRUMENT_DECLINED" });
+
+    const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(result).toMatchObject({ success: false, error: { code: "failed_to_save_payment" } });
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_2", status: "pending" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "pending_payment", paymentStatus: null });
+  });
+
+  it("records a late capture on the order that took the money, even after a restart", async () => {
+    const s = setup();
+    const externalOrderId = await start(s);
+    restartDuringCapture(s, { status: "succeeded", externalPaymentId: "capture_order_1" });
+
+    const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        externalOrderId: "order_1",
+        externalPaymentId: "capture_order_1",
+        status: "succeeded",
+      },
+    });
+    expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "succeeded" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
   it("leaves the payment pending when the provider cannot be reached", async () => {
     const s = setup();
     const externalOrderId = await start(s);

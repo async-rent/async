@@ -19,7 +19,9 @@ interface Reply {
 }
 
 const tokenReply: Reply = { body: { access_token: "access-token", expires_in: 32400 } };
-const unknownPath: Reply = { status: 404, body: { name: "RESOURCE_NOT_FOUND" } };
+// Loud on purpose: a 404 means "expired order" to `getOrder`, so a mistyped
+// path must not quietly read as one.
+const unknownPath: Reply = { status: 500, body: { name: "UNSTUBBED_PATH" } };
 
 // A PayPal that answers each path with a fixed reply and records what it was sent.
 function stubPayPal(replies: Record<string, Reply>) {
@@ -391,6 +393,34 @@ describe("getOrder", () => {
     expect(result).toMatchObject(failure("payment_pending", "PayPal capture CAPTURE1 is PENDING"));
   });
 
+  it.each([
+    { status: "PARTIALLY_REFUNDED", data: { status: "succeeded", externalPaymentId: "CAPTURE1" } },
+    {
+      status: "REFUNDED",
+      data: { status: "failed", failureReason: "PayPal refunded the payment." },
+    },
+  ])("reports a $status capture as settled, never as pending", async ({ status, data }) => {
+    const paypal = stubPayPal({
+      [orderPath]: { body: capturedOrder({ id: "CAPTURE1", status }) },
+    });
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toEqual({ success: true, data });
+  });
+
+  it("fails on a capture status PayPal does not document", async () => {
+    const paypal = stubPayPal({
+      [orderPath]: { body: capturedOrder({ id: "CAPTURE1", status: "SOMETHING_NEW" }) },
+    });
+
+    const result = await paypal.adapter.getOrder(lookup);
+
+    expect(result).toMatchObject(
+      failure("provider_response_invalid", "PayPal capture CAPTURE1 is SOMETHING_NEW"),
+    );
+  });
+
   it("fails on a completed order that shows no capture", async () => {
     const paypal = stubPayPal({ [orderPath]: { body: { id: "ORDER1", status: "COMPLETED" } } });
 
@@ -402,7 +432,9 @@ describe("getOrder", () => {
   });
 
   it("reports an order PayPal dropped after it expired as open", async () => {
-    const paypal = stubPayPal({});
+    const paypal = stubPayPal({
+      [orderPath]: { status: 404, body: { name: "RESOURCE_NOT_FOUND" } },
+    });
 
     const result = await paypal.adapter.getOrder(lookup);
 

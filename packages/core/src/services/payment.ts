@@ -281,6 +281,10 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
    * Prepares a rental's first charge and hands back where the customer
    * approves it. Calling it again for an abandoned or declined attempt opens a
    * fresh order on the same payment row, because a rental has one row per cycle.
+   *
+   * If the earlier order turns out to be paid already, the payment is recorded
+   * and the call fails with `payment_already_started`: callers should then show
+   * the rental as paid, not as an error.
    */
   async function startPayment(input: StartPaymentInput): Promise<StartPaymentResult> {
     const { ok, err } = startPaymentResult;
@@ -463,13 +467,26 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
             outcome.status === "succeeded"
               ? {
                   status: "succeeded",
+                  externalOrderId: row.externalOrderId,
                   externalPaymentId: outcome.externalPaymentId,
                   paidAt: now,
                   updatedAt: now,
                 }
               : { status: "failed", failureReason: outcome.failureReason, updatedAt: now },
           )
-          .where(and(eq(payments.id, row.id), eq(payments.status, "pending")))
+          // `startPayment` may have swapped in a new order while the provider
+          // answered. Money taken is recorded anyway, on the order that took it,
+          // and the unpaid one is dropped. A decline only counts for its own
+          // order, so a newer one the customer opened stays pending.
+          .where(
+            outcome.status === "succeeded"
+              ? and(eq(payments.id, row.id), eq(payments.status, "pending"))
+              : and(
+                  eq(payments.id, row.id),
+                  eq(payments.status, "pending"),
+                  eq(payments.externalOrderId, row.externalOrderId),
+                ),
+          )
           .returning(),
         db
           .update(rentals)
@@ -478,14 +495,36 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
               ? { status: "confirmed", paymentStatusSnapshot: "succeeded", updatedAt: now }
               : { paymentStatusSnapshot: "failed", updatedAt: now },
           )
-          .where(and(eq(rentals.id, row.rentalId), eq(rentals.status, "pending_payment"))),
+          .where(
+            outcome.status === "succeeded"
+              ? and(eq(rentals.id, row.rentalId), eq(rentals.status, "pending_payment"))
+              : and(
+                  eq(rentals.id, row.rentalId),
+                  eq(rentals.status, "pending_payment"),
+                  // Same guard as the payment: a stale decline leaves the rental alone.
+                  inArray(
+                    rentals.id,
+                    db
+                      .select({ rentalId: payments.rentalId })
+                      .from(payments)
+                      .where(
+                        and(
+                          eq(payments.id, row.id),
+                          eq(payments.externalOrderId, row.externalOrderId),
+                        ),
+                      ),
+                  ),
+                ),
+          ),
       ]),
     );
     if (!saved.ok) return err("failed_to_save_payment", "Failed to save payment", saved.error);
 
     const [[settled]] = saved.value;
-    // Another request settled it between the read and the write.
-    if (!settled) return err("failed_to_save_payment", "Payment was settled by another request");
+    // Another request settled it, or replaced its order, between the read and the write.
+    if (!settled) {
+      return err("failed_to_save_payment", "Payment was settled or replaced by another request");
+    }
 
     const payment = parsePayment(settled);
     if (!payment) return err("payment_data_invalid", `Payment ${settled.id} has invalid data`);
