@@ -107,6 +107,15 @@ const currencyDigits = new Map<string, number>([
   ["JPY", 0],
 ]);
 
+// Capture statuses PayPal can still move: held money settles or is declined,
+// taken money can be refunded. DECLINED, FAILED and REFUNDED are final.
+const pendingCaptureStatuses: ReadonlySet<string> = new Set(["PENDING"]);
+const changeableCaptureStatuses: ReadonlySet<string> = new Set([
+  "PENDING",
+  "COMPLETED",
+  "PARTIALLY_REFUNDED",
+]);
+
 // PayPal rejects decimals for these, even though ISO 4217 gives them cents.
 const wholeUnitCurrencies = new Set(["HUF", "TWD"]);
 
@@ -200,10 +209,12 @@ interface CallOptions {
  *
  * Every method returns a result and never throws. Capture and refund send an
  * idempotency key derived from the PayPal id, so a retried confirm or refund
- * replays PayPal's first answer instead of moving money twice. A capture or
- * refund that comes back pending is read again by its id, so a later call sees
- * it settle, and a capture retried after PayPal forgot the key reads the order
- * instead. Every call fetches a fresh access token; nothing is cached.
+ * replays PayPal's first answer instead of moving money twice. A capture that
+ * could still change (pending, or taken and so refundable) and a pending
+ * refund are read again by their id, so a later call sees where they stand now
+ * rather than the replayed answer. A capture retried after PayPal forgot the
+ * key reads the order instead. Every call fetches a fresh access token;
+ * nothing is cached.
  */
 export function createPayPalAdapter(options: CreatePayPalAdapterOptions): PaymentProviderAdapter {
   const baseUrl = baseUrls[options.environment ?? "sandbox"];
@@ -318,7 +329,9 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     if (!first)
       return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
 
-    return toCaptureResult(await readLatestCapture(first));
+    // The reply may be a replay of a capture made up to 6 hours ago, which
+    // has since been refunded, so it is read fresh unless it can no longer change.
+    return toCaptureResult(await readLatestCapture(first, changeableCaptureStatuses));
   }
 
   async function getOrder(input: GetProviderOrderInput): Promise<GetProviderOrderResult> {
@@ -352,7 +365,8 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     }
 
     const first = toFirstCapture(order.data);
-    if (first) return toCaptureResult(await readLatestCapture(first));
+    // The order was just read, so only a held capture is worth asking about again.
+    if (first) return toCaptureResult(await readLatestCapture(first, pendingCaptureStatuses));
     // A completed order always carries its capture, so one without is not a shape we know.
     if (order.data.status === "COMPLETED") {
       return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
@@ -364,12 +378,15 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
   }
 
   /**
-   * A pending capture read straight from PayPal, so a retried confirm sees it
-   * settle whatever the idempotent capture replays. Any capture that is not
-   * pending, or a read that fails, keeps what the capture call said.
+   * A capture in one of `refresh` read straight from PayPal, so a retried
+   * confirm sees it settle or be refunded whatever the idempotent capture
+   * replays. Any other capture, or a read that fails, keeps what PayPal said.
    */
-  async function readLatestCapture(capture: Capture): Promise<Capture> {
-    if (capture.status !== "PENDING") return capture;
+  async function readLatestCapture(
+    capture: Capture,
+    refresh: ReadonlySet<string>,
+  ): Promise<Capture> {
+    if (!refresh.has(capture.status)) return capture;
 
     const reply = await call(`/v2/payments/captures/${encodeURIComponent(capture.id)}`, {
       method: "GET",

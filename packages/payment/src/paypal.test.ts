@@ -219,11 +219,13 @@ const orderPath = "/v2/checkout/orders/ORDER1";
 
 describe("captureOrder", () => {
   const capturePath = "/v2/checkout/orders/ORDER1/capture";
+  const capturePathById = "/v2/payments/captures/CAPTURE1";
   const capture = { externalOrderId: "ORDER1" };
 
   it("collects the money and returns the capture id", async () => {
     const paypal = stubPayPal({
       [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
+      [capturePathById]: { body: { id: "CAPTURE1", status: "COMPLETED" } },
     });
 
     const result = await paypal.adapter.captureOrder(capture);
@@ -233,6 +235,47 @@ describe("captureOrder", () => {
       data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
     });
     expect(paypal.sentTo(capturePath).headers.get("PayPal-Request-Id")).toBe("capture-ORDER1");
+  });
+
+  it("reads a replayed capture fresh and reports one refunded since as failed", async () => {
+    const paypal = stubPayPal({
+      // PayPal replays the first answer for the same request id, even after a refund.
+      [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
+      [capturePathById]: { body: { id: "CAPTURE1", status: "REFUNDED" } },
+    });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toEqual({
+      success: true,
+      data: { status: "failed", failureReason: "PayPal refunded the payment." },
+    });
+  });
+
+  it("keeps the captured answer when the fresh read fails", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }) },
+      [capturePathById]: { status: 503 },
+    });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toEqual({
+      success: true,
+      data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
+    });
+  });
+
+  it("does not read a declined capture again, since it can no longer change", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: { status: 201, body: capturedOrder({ id: "CAPTURE1", status: "DECLINED" }) },
+    });
+
+    await paypal.adapter.captureOrder(capture);
+
+    expect(paypal.fetch.mock.calls.map(([url]) => new URL(url).pathname)).not.toContain(
+      capturePathById,
+    );
   });
 
   it("reports a refused payment method as a failed charge", async () => {
@@ -462,7 +505,7 @@ describe("getOrder", () => {
 
 describe("refund", () => {
   const refundPath = "/v2/payments/captures/CAPTURE1/refund";
-  const input = { externalPaymentId: "CAPTURE1", amount: 37000, currency: "USD" };
+  const input = { externalPaymentId: "CAPTURE1" };
 
   it("returns what the capture has left to the customer, once per capture", async () => {
     const paypal = stubPayPal({

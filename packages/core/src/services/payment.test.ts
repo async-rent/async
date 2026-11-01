@@ -238,7 +238,17 @@ describe("startPayment", () => {
       ...urls,
     });
 
-    expect(result).toMatchObject({ success: false, error: { code: "payment_already_started" } });
+    // Paid, so there is nothing to approve.
+    expect(result).toEqual({
+      success: true,
+      data: {
+        payment: expect.objectContaining({
+          externalOrderId: "order_1",
+          externalPaymentId: "capture_order_1",
+          status: "succeeded",
+        }),
+      },
+    });
     expect(s.createOrder).toHaveBeenCalledTimes(1);
     expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "succeeded" });
     expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
@@ -255,7 +265,11 @@ describe("startPayment", () => {
       ...urls,
     });
 
-    expect(result).toMatchObject({ success: false, error: { code: "payment_already_started" } });
+    expect(result).toMatchObject({
+      success: true,
+      data: { payment: { externalOrderId: "order_1", status: "succeeded" } },
+    });
+    expect(result.success && result.data.approvalUrl).toBeUndefined();
     expect(s.captureOrder).toHaveBeenCalledWith({ externalOrderId: "order_1" });
     expect(s.createOrder).toHaveBeenCalledTimes(1);
     expect(s.paymentRow()).toEqual({ externalOrderId: "order_1", status: "succeeded" });
@@ -480,9 +494,18 @@ describe("confirmPayment", () => {
 
     const result = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
 
+    // The second charge is named so it can be refunded; no row records it.
     expect(result).toMatchObject({
       success: false,
-      error: { code: "payment_replaced", message: expect.stringContaining("capture_order_1") },
+      error: {
+        code: "payment_captured_twice",
+        cause: {
+          paymentId: expect.any(String),
+          provider: "paypal",
+          externalOrderId: "order_1",
+          externalPaymentId: "capture_order_1",
+        },
+      },
     });
     expect(s.paymentRow()).toEqual({ externalOrderId: "order_2", status: "succeeded" });
     expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
@@ -550,11 +573,8 @@ describe("refundPayment", () => {
     const result = await s.service.refundPayment({ paymentId });
 
     expect(result).toMatchObject({ success: true, data: { id: paymentId, status: "refunded" } });
-    expect(s.refund).toHaveBeenCalledWith({
-      externalPaymentId: "capture_order_1",
-      amount: 37000,
-      currency: "USD",
-    });
+    // No amount: the provider refunds whatever the charge has left.
+    expect(s.refund).toHaveBeenCalledWith({ externalPaymentId: "capture_order_1" });
     expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "refunded" });
   });
 
