@@ -8,6 +8,7 @@ export default defineConfig({
     ignorePatterns: [
       ".agents/*",
       ".claude/*",
+      ".kiro/*",
       "**/worker-configuration.d.ts",
       "**/routeTree.gen.ts",
       "packages/db/migrations/meta/*",
@@ -20,6 +21,7 @@ export default defineConfig({
     ignorePatterns: [
       ".agents/*",
       ".claude/*",
+      ".kiro/*",
       "**/worker-configuration.d.ts",
       "**/routeTree.gen.ts",
     ],
