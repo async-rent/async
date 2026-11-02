@@ -1,0 +1,4 @@
+# Clerk instance that signs users in and issues the MCP OAuth access tokens.
+# Enable "Dynamic client registration" under OAuth applications in the Clerk Dashboard.
+CLERK_PUBLISHABLE_KEY=
+CLERK_SECRET_KEY=

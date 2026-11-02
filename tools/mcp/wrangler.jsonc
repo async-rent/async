@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "async-rent-mcp",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-10-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+  },
+  // Same database as the root wrangler.jsonc, which applies its migrations.
+  "d1_databases": [
+    {
+      "binding": "DATABASE",
+      "database_name": "async-rent",
+      "database_id": "bbc0d9b6-f588-4f08-8f53-171d6cb007ce",
+    },
+  ],
+  // Clerk is the OAuth authorization server: it signs users in and issues the
+  // access tokens this Worker verifies.
+  "secrets": { "required": ["CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] },
+  "env": {
+    "dev": {
+      "name": "async-rent-mcp-dev",
+      "d1_databases": [
+        {
+          "binding": "DATABASE",
+          "database_name": "async-rent_dev",
+          "database_id": "eaf08e17-dbae-4820-be5d-31e41b5dbd63",
+        },
+      ],
+      "secrets": { "required": ["CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] },
+    },
+    "staging": {
+      "name": "async-rent-mcp-staging",
+      "d1_databases": [
+        {
+          "binding": "DATABASE",
+          "database_name": "async-rent_staging",
+          "database_id": "129d6859-a153-4f65-bd7a-b69a142fd426",
+        },
+      ],
+      "secrets": { "required": ["CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] },
+    },
+  },
+}
