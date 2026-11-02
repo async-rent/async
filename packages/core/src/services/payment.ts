@@ -1,6 +1,6 @@
-import { payments, rentals } from "@async-rent/db";
+import { billingAgreements, payments, rentals } from "@async-rent/db";
 import type { PaymentRow } from "@async-rent/db";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, notExists, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
@@ -40,6 +40,20 @@ export const refundProviderPaymentInputSchema = z.object({
 
 export type RefundProviderPaymentInput = z.infer<typeof refundProviderPaymentInputSchema>;
 
+export const chargeSavedPaymentMethodInputSchema = z.object({
+  savedPaymentMethodId: z
+    .string()
+    .describe("Payment method the provider saved when the customer paid the first week."),
+  reference: z.string().describe("Rental reference to show on the charge, e.g. AR-2026-7KQ4M2."),
+  amount: amountSchema.describe("Amount to charge, in the currency's minor unit."),
+  currency: currencyCodeSchema,
+  idempotencyKey: z
+    .string()
+    .describe("Sending the same key again replays the first charge instead of charging twice."),
+});
+
+export type ChargeSavedPaymentMethodInput = z.infer<typeof chargeSavedPaymentMethodInputSchema>;
+
 export const providerErrorCodeSchema = z
   .enum([
     "invalid_request",
@@ -58,6 +72,12 @@ export const captureOutcomeSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("succeeded"),
     externalPaymentId: z.string().describe("Provider-side payment the money settled as."),
+    savedPaymentMethodId: z
+      .string()
+      .optional()
+      .describe(
+        "Payment method the provider saved with this charge, which later weeks are charged to without the customer present.",
+      ),
   }),
   z.object({
     status: z.literal("failed"),
@@ -115,6 +135,22 @@ export const refundProviderPaymentResult = createResult(z.void(), providerErrorC
 
 export type RefundProviderPaymentResult = z.infer<typeof refundProviderPaymentResult.schema>;
 
+/** Result constructors for `PaymentProviderAdapter.chargeSavedPaymentMethod`. */
+export const chargeSavedPaymentMethodResult = createResult(
+  z.object({
+    externalOrderId: z
+      .string()
+      .optional()
+      .describe(
+        "Provider-side order the charge opened; absent when it declined before opening one.",
+      ),
+    outcome: captureOutcomeSchema,
+  }),
+  providerErrorCodeSchema,
+);
+
+export type ChargeSavedPaymentMethodResult = z.infer<typeof chargeSavedPaymentMethodResult.schema>;
+
 /**
  * What a payment company must do for the payment service. The service only
  * talks to this interface, so adding a provider means writing one adapter and
@@ -149,6 +185,16 @@ export interface PaymentProviderAdapter {
    * the provider knows what the charge has left.
    */
   refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult>;
+
+  /**
+   * Charges a payment method the provider saved at checkout, without the
+   * customer present, and takes the money in one step. A decline succeeds
+   * with a `failed` outcome, as with `captureOrder`. Repeating a call with the
+   * same `idempotencyKey` replays the first charge's outcome.
+   */
+  chargeSavedPaymentMethod(
+    input: ChargeSavedPaymentMethodInput,
+  ): Promise<ChargeSavedPaymentMethodResult>;
 }
 
 /** The adapters a deployment has configured, keyed by provider name. */
@@ -192,6 +238,24 @@ export const listPaymentsInputSchema = z.object({
 });
 
 export type ListPaymentsInput = z.infer<typeof listPaymentsInputSchema>;
+
+export const chargeBillingCycleInputSchema = z.object({
+  billingAgreementId: z.string().describe("Billing plan whose week to charge."),
+  billingCycle: z
+    .number()
+    .int()
+    .min(2)
+    .describe("1-based week to charge. Week 1 is paid at checkout, so this starts at 2."),
+  attempt: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe(
+      "How many charges for this week were already declined. The same attempt replays the last charge, so a retry after a lost reply never charges twice; a new attempt is a fresh charge.",
+    ),
+});
+
+export type ChargeBillingCycleInput = z.infer<typeof chargeBillingCycleInputSchema>;
 
 const startPaymentResult = createResult(
   z.discriminatedUnion("status", [
@@ -268,6 +332,27 @@ const listPaymentsResult = createResult(
 
 export const listPaymentsResultSchema = listPaymentsResult.schema;
 export type ListPaymentsResult = z.infer<typeof listPaymentsResultSchema>;
+
+const chargeBillingCycleResult = createResult(
+  paymentSchema.describe(
+    "The week's payment: `succeeded` when it paid, `failed` with a reason when the provider declined it.",
+  ),
+  z.enum([
+    "billing_agreement_not_found",
+    "billing_agreement_not_active",
+    "provider_not_configured",
+    "no_saved_payment_method",
+    "provider_refused",
+    "payment_pending",
+    "provider_request_failed",
+    "failed_to_load_billing_agreement",
+    "failed_to_save_payment",
+    "payment_data_invalid",
+  ]),
+);
+
+export const chargeBillingCycleResultSchema = chargeBillingCycleResult.schema;
+export type ChargeBillingCycleResult = z.infer<typeof chargeBillingCycleResultSchema>;
 
 // Recording a provider's outcome on a pending payment, shared by confirm and start.
 const settlePaymentResult = createResult(
@@ -576,6 +661,8 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
 
     const now = new Date();
     const paid = outcome.status === "succeeded";
+    const savedPaymentMethodId =
+      outcome.status === "succeeded" ? (outcome.savedPaymentMethodId ?? null) : null;
 
     const saved = await attempt(
       db.batch([
@@ -642,6 +729,55 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
             ),
           ),
         db.select().from(payments).where(eq(payments.id, row.id)).limit(1),
+        // Paying the first week starts the weekly plan. It only matches once the
+        // statements above confirmed the rental on this row's first week, and
+        // never when the rental already has a plan, so a replay adds nothing.
+        db.insert(billingAgreements).select(
+          db
+            .select({
+              id: sql`${uuid()}`.as("id"),
+              rentalId: rentals.id,
+              provider: sql`${row.provider}`.as("provider"),
+              providerAgreementId: sql`${savedPaymentMethodId}`.as("provider_agreement_id"),
+              interval: sql`'weekly'`.as("interval"),
+              currency: rentals.currency,
+              status: sql`'active'`.as("status"),
+              // The first week covers the start date and the six days after it.
+              nextChargeAt: sql`(unixepoch(${rentals.startDate}, '+7 days') * 1000)`.as(
+                "next_charge_at",
+              ),
+              cancelledAt: sql`null`.as("cancelled_at"),
+              failedAttempts: sql`0`.as("failed_attempts"),
+              createdAt: sql`${now.getTime()}`.as("created_at"),
+              updatedAt: sql`null`.as("updated_at"),
+            })
+            .from(rentals)
+            .where(
+              and(
+                eq(rentals.id, row.rentalId),
+                eq(rentals.status, "confirmed"),
+                inArray(
+                  rentals.id,
+                  db
+                    .select({ rentalId: payments.rentalId })
+                    .from(payments)
+                    .where(
+                      and(
+                        eq(payments.id, row.id),
+                        eq(payments.billingCycle, firstBillingCycle),
+                        eq(payments.status, "succeeded"),
+                      ),
+                    ),
+                ),
+                notExists(
+                  db
+                    .select({ id: billingAgreements.id })
+                    .from(billingAgreements)
+                    .where(eq(billingAgreements.rentalId, rentals.id)),
+                ),
+              ),
+            ),
+        ),
       ]),
     );
     if (!saved.ok) return err("failed_to_save_payment", "Failed to save payment", saved.error);
@@ -762,11 +898,170 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     return ok(rows.value.flatMap((row) => parsePayment(row) ?? []));
   }
 
-  return { startPayment, confirmPayment, refundPayment, listPayments };
+  /**
+   * Charges one later week of a billing plan to the payment method saved at
+   * checkout, at the rental's weekly subtotal, and records the outcome on that
+   * week's payment row. A week already paid is returned as is, so the billing
+   * routine can rerun a week safely. A declined week is recorded as `failed`
+   * and charged afresh by the next attempt, on the same row.
+   *
+   * Only a recorded decline or an outright refusal (`provider_refused`) means
+   * no money moved. Any other failure leaves the outcome unknown, so the caller
+   * retries with the same `attempt`, which the provider replays.
+   */
+  async function chargeBillingCycle(
+    input: ChargeBillingCycleInput,
+  ): Promise<ChargeBillingCycleResult> {
+    const { ok, err } = chargeBillingCycleResult;
+
+    const loaded = await attempt(
+      db.batch([
+        db
+          .select({
+            agreement: billingAgreements,
+            number: rentals.number,
+            weeklySubtotal: rentals.weeklySubtotal,
+          })
+          .from(billingAgreements)
+          .innerJoin(rentals, eq(rentals.id, billingAgreements.rentalId))
+          .where(eq(billingAgreements.id, input.billingAgreementId))
+          .limit(1),
+        db
+          .select()
+          .from(payments)
+          .where(
+            and(
+              eq(payments.billingAgreementId, input.billingAgreementId),
+              eq(payments.billingCycle, input.billingCycle),
+            ),
+          )
+          .limit(1),
+      ]),
+    );
+    if (!loaded.ok) {
+      return err("failed_to_load_billing_agreement", "Failed to load billing plan", loaded.error);
+    }
+
+    const [[plan], [existing]] = loaded.value;
+    if (!plan) {
+      return err(
+        "billing_agreement_not_found",
+        `Billing plan ${input.billingAgreementId} not found`,
+      );
+    }
+
+    const { agreement } = plan;
+
+    if (existing && !isUnpaid(existing.status)) {
+      const payment = parsePayment(existing);
+
+      return payment
+        ? ok(payment)
+        : err("payment_data_invalid", `Payment ${existing.id} has invalid data`);
+    }
+    if (agreement.status !== "active") {
+      return err(
+        "billing_agreement_not_active",
+        `Billing plan ${agreement.id} is ${agreement.status}`,
+      );
+    }
+
+    const adapter = providers[agreement.provider];
+    if (!adapter) {
+      return err("provider_not_configured", `Provider ${agreement.provider} is not configured`);
+    }
+    if (!agreement.providerAgreementId) {
+      return err(
+        "no_saved_payment_method",
+        `Rental ${plan.number} has no saved payment method to charge`,
+      );
+    }
+
+    const idempotencyKey = `renewal-${agreement.id}-${input.billingCycle}-${input.attempt}`;
+    const charged = await adapter.chargeSavedPaymentMethod({
+      savedPaymentMethodId: agreement.providerAgreementId,
+      reference: plan.number,
+      amount: plan.weeklySubtotal,
+      currency: agreement.currency,
+      idempotencyKey,
+    });
+    if (!charged.success) {
+      const { code } = charged.error;
+      if (code === "payment_pending") {
+        return err(
+          "payment_pending",
+          `Week ${input.billingCycle} of rental ${plan.number} is on hold at the provider`,
+          charged.error,
+        );
+      }
+      // A refused or malformed request never reached the money.
+      if (code === "provider_refused" || code === "invalid_request") {
+        return err("provider_refused", "The payment provider refused the charge", charged.error);
+      }
+
+      return err("provider_request_failed", "The payment provider failed", charged.error);
+    }
+
+    const { outcome } = charged.data;
+    const paid = outcome.status === "succeeded";
+    const now = new Date();
+    const charge = {
+      billingAgreementId: agreement.id,
+      provider: agreement.provider,
+      // A charge declined before the provider opened an order has no order id,
+      // so the row keeps the request's key, which is unique per attempt.
+      externalOrderId: charged.data.externalOrderId ?? idempotencyKey,
+      externalPaymentId: paid ? outcome.externalPaymentId : null,
+      amount: plan.weeklySubtotal,
+      currency: agreement.currency,
+      status: outcome.status,
+      paidAt: paid ? now : null,
+      failureReason: paid ? null : outcome.failureReason,
+    } as const;
+
+    const saved = await attempt(
+      db.batch([
+        existing
+          ? db
+              .update(payments)
+              .set({ ...charge, updatedAt: now })
+              .where(and(eq(payments.id, existing.id), inArray(payments.status, unpaidStatuses)))
+              .returning()
+          : db
+              .insert(payments)
+              .values({
+                ...charge,
+                id: uuid(),
+                rentalId: agreement.rentalId,
+                billingCycle: input.billingCycle,
+              })
+              .returning(),
+        db
+          .update(rentals)
+          .set({ paymentStatusSnapshot: outcome.status, updatedAt: now })
+          .where(eq(rentals.id, agreement.rentalId)),
+      ]),
+    );
+    if (!saved.ok) return err("failed_to_save_payment", "Failed to save payment", saved.error);
+
+    const [[row]] = saved.value;
+    if (!row) return err("failed_to_save_payment", "Payment was recorded by another request");
+
+    const payment = parsePayment(row);
+    if (!payment) return err("payment_data_invalid", `Payment ${row.id} has invalid data`);
+
+    return ok(payment);
+  }
+
+  return { startPayment, confirmPayment, refundPayment, listPayments, chargeBillingCycle };
 }
 
 export type PaymentService = ReturnType<typeof createPaymentService>;
 
 function isRestartable(status: PaymentRow["status"]): boolean {
   return restartableStatuses.some((restartable) => restartable === status);
+}
+
+function isUnpaid(status: PaymentRow["status"]): boolean {
+  return unpaidStatuses.some((unpaid) => unpaid === status);
 }

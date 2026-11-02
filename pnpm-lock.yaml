@@ -307,6 +307,12 @@ importers:
       '@async-rent/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@async-rent/payment':
+        specifier: workspace:*
+        version: link:../../packages/payment
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.4
       hono:
         specifier: 'catalog:'
         version: 4.13.13

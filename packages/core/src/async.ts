@@ -1,6 +1,7 @@
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { createCartService } from "./services/cart";
 import { createCatalogService } from "./services/catalog";
+import { createBillingService } from "./services/billing";
 import { createPaymentService } from "./services/payment";
 import type { PaymentProviders } from "./services/payment";
 import { createPricingService } from "./services/pricing";
@@ -34,12 +35,14 @@ export interface CreateAsyncOptions {
  */
 export function createAsync({ db, paymentProviders = {} }: CreateAsyncOptions) {
   const pricing = createPricingService();
+  const payment = createPaymentService({ db, providers: paymentProviders });
 
   return {
     catalog: createCatalogService({ db }),
     cart: createCartService({ db, pricing }),
     rental: createRentalService({ db, pricing }),
-    payment: createPaymentService({ db, providers: paymentProviders }),
+    payment,
+    billing: createBillingService({ db, payment }),
     pricing,
   };
 }

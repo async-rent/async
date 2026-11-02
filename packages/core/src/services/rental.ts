@@ -1,6 +1,8 @@
 import {
+  billingAgreements,
   cartItems,
   carts,
+  liveBillingAgreementStatusValues,
   locations,
   productImages,
   productPrices,
@@ -643,21 +645,42 @@ export function createRentalService({ db, pricing }: CreateRentalServiceOptions)
         ? `${row.notes}\n${input.reason}`
         : (input.reason ?? row.notes ?? null);
 
+    const now = new Date();
     const updated = await attempt(
-      db
-        .update(rentals)
-        .set({ status: "cancelled", cancelledAt: new Date(), notes })
-        .where(
-          and(
-            eq(rentals.id, input.rentalId),
-            inArray(rentals.status, [...cancellableRentalStatusValues]),
+      db.batch([
+        db
+          .update(rentals)
+          .set({ status: "cancelled", cancelledAt: now, notes })
+          .where(
+            and(
+              eq(rentals.id, input.rentalId),
+              inArray(rentals.status, [...cancellableRentalStatusValues]),
+            ),
+          )
+          .returning(),
+        // A cancelled rental bills no more weeks. Only once the rental above is
+        // cancelled, so a refused cancel leaves its billing as it is.
+        db
+          .update(billingAgreements)
+          .set({ status: "cancelled", cancelledAt: now, nextChargeAt: null, updatedAt: now })
+          .where(
+            and(
+              eq(billingAgreements.rentalId, input.rentalId),
+              inArray(billingAgreements.status, [...liveBillingAgreementStatusValues]),
+              inArray(
+                billingAgreements.rentalId,
+                db
+                  .select({ id: rentals.id })
+                  .from(rentals)
+                  .where(and(eq(rentals.id, input.rentalId), eq(rentals.status, "cancelled"))),
+              ),
+            ),
           ),
-        )
-        .returning(),
+      ]),
     );
     if (!updated.ok) return err("failed_to_save_rental", "Failed to save rental", updated.error);
 
-    const [cancelled] = updated.value;
+    const [[cancelled]] = updated.value;
     // The row moved out of a cancellable status between the read and the write.
     if (!cancelled) {
       return err(

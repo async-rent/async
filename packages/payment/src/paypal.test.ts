@@ -606,3 +606,140 @@ describe("refund", () => {
     expect(result).toMatchObject(failure("provider_refused", "PayPal refund REFUND1 is FAILED"));
   });
 });
+
+describe("saving the payment method", () => {
+  const ordersPath = "/v2/checkout/orders";
+  const capturePath = "/v2/checkout/orders/ORDER1/capture";
+  const vaulted = { paypal: { attributes: { vault: { id: "VAULT1", status: "VAULTED" } } } };
+
+  it("asks PayPal to save the account once the first charge succeeds", async () => {
+    const paypal = stubPayPal({ [ordersPath]: { status: 201, body: createdOrder } });
+
+    await paypal.adapter.createOrder(order);
+
+    expect(paypal.sentTo(ordersPath).body.payment_source.paypal.attributes).toEqual({
+      vault: { store_in_vault: "ON_SUCCESS", usage_type: "MERCHANT", customer_type: "CONSUMER" },
+    });
+  });
+
+  it("does not ask to save the account when turned off", async () => {
+    const fetch = vi.fn<PayPalFetch>(async (url) =>
+      Response.json(url.endsWith("/token") ? tokenReply.body : createdOrder, { status: 201 }),
+    );
+    const adapter = createPayPalAdapter({
+      clientId: "client",
+      clientSecret: "secret",
+      fetch,
+      savePaymentMethods: false,
+    });
+
+    await adapter.createOrder(order);
+
+    const [, init] = fetch.mock.calls.at(-1) ?? [];
+    expect(JSON.parse(String(init?.body)).payment_source.paypal).not.toHaveProperty("attributes");
+  });
+
+  it("returns the saved account with the capture", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: {
+        status: 201,
+        body: {
+          ...capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }),
+          payment_source: vaulted,
+        },
+      },
+      "/v2/payments/captures/CAPTURE1": { body: { id: "CAPTURE1", status: "COMPLETED" } },
+    });
+
+    const result = await paypal.adapter.captureOrder({ externalOrderId: "ORDER1" });
+
+    expect(result).toEqual({
+      success: true,
+      data: { status: "succeeded", externalPaymentId: "CAPTURE1", savedPaymentMethodId: "VAULT1" },
+    });
+  });
+
+  it("returns no saved account while PayPal has not vaulted it", async () => {
+    const paypal = stubPayPal({
+      [capturePath]: {
+        status: 201,
+        body: {
+          ...capturedOrder({ id: "CAPTURE1", status: "COMPLETED" }),
+          payment_source: { paypal: { attributes: { vault: { status: "APPROVED" } } } },
+        },
+      },
+      "/v2/payments/captures/CAPTURE1": { body: { id: "CAPTURE1", status: "COMPLETED" } },
+    });
+
+    const result = await paypal.adapter.captureOrder({ externalOrderId: "ORDER1" });
+
+    expect(result).toEqual({
+      success: true,
+      data: { status: "succeeded", externalPaymentId: "CAPTURE1" },
+    });
+  });
+});
+
+describe("chargeSavedPaymentMethod", () => {
+  const ordersPath = "/v2/checkout/orders";
+  const charge = {
+    savedPaymentMethodId: "VAULT1",
+    reference: "AR-2026-AAAAAA",
+    amount: 12000,
+    currency: "USD",
+    idempotencyKey: "renewal-plan-2-0",
+  };
+
+  it("charges the saved account in one step with the caller's idempotency key", async () => {
+    const paypal = stubPayPal({
+      [ordersPath]: { status: 201, body: capturedOrder({ id: "CAPTURE2", status: "COMPLETED" }) },
+    });
+
+    const result = await paypal.adapter.chargeSavedPaymentMethod(charge);
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        externalOrderId: "ORDER1",
+        outcome: { status: "succeeded", externalPaymentId: "CAPTURE2" },
+      },
+    });
+    const sent = paypal.sentTo(ordersPath);
+    expect(sent.headers.get("PayPal-Request-Id")).toBe("renewal-plan-2-0");
+    expect(sent.body).toEqual({
+      intent: "CAPTURE",
+      purchase_units: [
+        {
+          reference_id: charge.reference,
+          description: `Async rental ${charge.reference}`,
+          amount: { currency_code: "USD", value: "120.00" },
+        },
+      ],
+      payment_source: { paypal: { vault_id: "VAULT1" } },
+    });
+  });
+
+  it("reports a declined account as a failed charge", async () => {
+    const paypal = stubPayPal({ [ordersPath]: paypalError(422, "INSTRUMENT_DECLINED") });
+
+    const result = await paypal.adapter.chargeSavedPaymentMethod(charge);
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        outcome: {
+          status: "failed",
+          failureReason: "The payment method was declined. Try another one.",
+        },
+      },
+    });
+  });
+
+  it("fails on a refusal that is not about the customer", async () => {
+    const paypal = stubPayPal({ [ordersPath]: paypalError(422, "INVALID_VAULT_ID") });
+
+    const result = await paypal.adapter.chargeSavedPaymentMethod(charge);
+
+    expect(result).toMatchObject(failure("provider_refused", "INVALID_VAULT_ID"));
+  });
+});
