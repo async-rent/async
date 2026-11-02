@@ -1,5 +1,5 @@
 import { createAsync } from "@async-rent/core";
-import { clerkMiddleware } from "@clerk/hono";
+import { clerkMiddleware, getAuth } from "@clerk/hono";
 import {
   authServerMetadataHandlerClerk,
   mcpAuthClerk,
@@ -23,10 +23,14 @@ app.get(
 // Older MCP clients look for the authorization server metadata on the resource itself.
 app.get("/.well-known/oauth-authorization-server", authServerMetadataHandlerClerk);
 
-app.all("/mcp", clerkMiddleware(), mcpAuthClerk, (c) => {
+app.all("/mcp", clerkMiddleware(), mcpAuthClerk, async (c) => {
+  // mcpAuthClerk has already verified the OAuth token; this narrows the type to its user.
+  const auth = getAuth(c, { acceptsToken: "oauth_token" });
+  if (!auth.isAuthenticated) return c.json({ error: "Unauthorized" }, 401);
+
   const async = createAsync({ db: drizzle(c.env.DATABASE) });
 
-  return streamableHttpHandler(() => createMcpServer({ async }))(c);
+  return streamableHttpHandler(() => createMcpServer({ async, userId: auth.userId }))(c);
 });
 
 export default {
