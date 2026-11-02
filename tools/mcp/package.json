@@ -1,0 +1,29 @@
+{
+  "name": "@async-rent/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "@async-rent/core": "workspace:*",
+    "@clerk/hono": "catalog:",
+    "@clerk/mcp-tools": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "drizzle-orm": "catalog:",
+    "hono": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "catalog:"
+  }
+}
