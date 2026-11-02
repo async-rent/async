@@ -34,6 +34,14 @@ function setup({ endDate }: { endDate?: string } = {}) {
     )
     .run(endDate ?? null);
 
+  const charge = vi.fn<PaymentProviderAdapter["chargeSavedPaymentMethod"]>(
+    async ({ idempotencyKey }) =>
+      chargeSavedPaymentMethodResult.ok({
+        externalOrderId: `order_${idempotencyKey}`,
+        outcome: { status: "succeeded", externalPaymentId: `capture_${idempotencyKey}` },
+      }),
+  );
+
   const adapter: PaymentProviderAdapter = {
     createOrder: vi.fn(async () =>
       createProviderOrderResult.ok({
@@ -50,16 +58,8 @@ function setup({ endDate }: { endDate?: string } = {}) {
     ),
     getOrder: vi.fn(async () => getProviderOrderResult.ok({ status: "open" })),
     refund: vi.fn(async () => refundProviderPaymentResult.ok()),
-  } as Omit<PaymentProviderAdapter, "chargeSavedPaymentMethod"> as PaymentProviderAdapter;
-
-  const charge = vi.fn<PaymentProviderAdapter["chargeSavedPaymentMethod"]>(
-    async ({ idempotencyKey }) =>
-      chargeSavedPaymentMethodResult.ok({
-        externalOrderId: `order_${idempotencyKey}`,
-        outcome: { status: "succeeded", externalPaymentId: `capture_${idempotencyKey}` },
-      }),
-  );
-  adapter.chargeSavedPaymentMethod = charge;
+    chargeSavedPaymentMethod: charge,
+  };
 
   const payment = createPaymentService({ db: database.db, providers: { paypal: adapter } });
   const billing = createBillingService({ db: database.db, payment });
@@ -227,6 +227,36 @@ describe("runDueBilling", () => {
     expect(retried).toMatchObject({ data: { results: [{ outcome: "charged" }] } });
     const [first, second] = s.charge.mock.calls.map(([input]) => input.idempotencyKey);
     expect(second).toBe(first);
+  });
+
+  it("pauses the plan when the provider holds the charge, so it is never charged twice", async () => {
+    const s = setup();
+    await s.checkout();
+    s.charge.mockResolvedValueOnce(
+      chargeSavedPaymentMethodResult.err("payment_pending", "PayPal capture is PENDING"),
+    );
+
+    const run = await s.billing.runDueBilling({ now: "2026-02-08T01:00:00Z" });
+    const rerun = await s.billing.runDueBilling({ now: "2026-02-08T02:00:00Z" });
+
+    expect(run).toMatchObject({ data: { results: [{ outcome: "paused" }] } });
+    expect(rerun).toEqual({ success: true, data: { results: [] } });
+    expect(await s.plan()).toMatchObject({ status: "paused", failedAttempts: 0 });
+    expect(s.charge).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retrying without counting a decline when no provider is configured", async () => {
+    const s = setup();
+    await s.checkout();
+    const billing = createBillingService({
+      db: s.db,
+      payment: createPaymentService({ db: s.db, providers: {} }),
+    });
+
+    const run = await billing.runDueBilling({ now: "2026-02-08T01:00:00Z" });
+
+    expect(run).toMatchObject({ data: { results: [{ outcome: "retry_later" }] } });
+    expect(await s.plan()).toMatchObject({ status: "active", failedAttempts: 0 });
   });
 
   it("ends the plan without charging once the rental's end date has passed", async () => {

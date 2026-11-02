@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createPayPalAdapter } from "./paypal";
-import type { PayPalFetch } from "./paypal";
+import type { CreatePayPalAdapterOptions, PayPalFetch } from "./paypal";
 
 const sandbox = "https://api-m.sandbox.paypal.com";
 const approvalUrl = "https://www.sandbox.paypal.com/checkoutnow?token=ORDER1";
@@ -24,7 +24,10 @@ const tokenReply: Reply = { body: { access_token: "access-token", expires_in: 32
 const unknownPath: Reply = { status: 500, body: { name: "UNSTUBBED_PATH" } };
 
 // A PayPal that answers each path with a fixed reply and records what it was sent.
-function stubPayPal(replies: Record<string, Reply>) {
+function stubPayPal(
+  replies: Record<string, Reply>,
+  options: Partial<CreatePayPalAdapterOptions> = {},
+) {
   const fetch = vi.fn<PayPalFetch>(async (url) => {
     const path = new URL(url).pathname;
     const reply = replies[path] ?? (path === "/v1/oauth2/token" ? tokenReply : unknownPath);
@@ -35,7 +38,12 @@ function stubPayPal(replies: Record<string, Reply>) {
       : Response.json(reply.body, { status });
   });
 
-  const adapter = createPayPalAdapter({ clientId: "client", clientSecret: "secret", fetch });
+  const adapter = createPayPalAdapter({
+    clientId: "client",
+    clientSecret: "secret",
+    fetch,
+    ...options,
+  });
 
   // The headers and JSON body last sent to `path`.
   const sentTo = (path: string) => {
@@ -623,20 +631,14 @@ describe("saving the payment method", () => {
   });
 
   it("does not ask to save the account when turned off", async () => {
-    const fetch = vi.fn<PayPalFetch>(async (url) =>
-      Response.json(url.endsWith("/token") ? tokenReply.body : createdOrder, { status: 201 }),
+    const paypal = stubPayPal(
+      { [ordersPath]: { status: 201, body: createdOrder } },
+      { savePaymentMethods: false },
     );
-    const adapter = createPayPalAdapter({
-      clientId: "client",
-      clientSecret: "secret",
-      fetch,
-      savePaymentMethods: false,
-    });
 
-    await adapter.createOrder(order);
+    await paypal.adapter.createOrder(order);
 
-    const [, init] = fetch.mock.calls.at(-1) ?? [];
-    expect(JSON.parse(String(init?.body)).payment_source.paypal).not.toHaveProperty("attributes");
+    expect(paypal.sentTo(ordersPath).body.payment_source.paypal).not.toHaveProperty("attributes");
   });
 
   it("returns the saved account with the capture", async () => {

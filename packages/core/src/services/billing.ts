@@ -31,6 +31,9 @@ const defaultRunLimit = 50;
 const dayMs = 24 * 60 * 60 * 1000;
 const weekMs = 7 * dayMs;
 
+/** Payment statuses that mean a week was paid, even if refunded since. */
+const paidPaymentStatuses = ["succeeded", "refunded"] as const;
+
 /** Rental statuses that still have gear out and keep billing. */
 const billableRentalStatuses = ["confirmed", "active"] as const satisfies readonly RentalStatus[];
 
@@ -64,7 +67,7 @@ export type CancelBillingPlanInput = z.infer<typeof cancelBillingPlanInputSchema
 export const billingRunOutcomeSchema = z
   .enum(["charged", "declined", "paused", "ended", "retry_later"])
   .describe(
-    "What a run did with one due plan: charged its next week, recorded a decline to retry, paused it after too many declines, ended it because the rental is over, or left it for the next run because the outcome is not known yet.",
+    "What a run did with one due plan: charged its next week, recorded a decline to retry, paused it after too many declines or a charge the provider holds, ended it because the rental is over, or left it for the next run because the outcome is not known yet.",
   );
 
 export type BillingRunOutcome = z.infer<typeof billingRunOutcomeSchema>;
@@ -164,11 +167,15 @@ function parseBillingAgreement(row: BillingAgreementRow): BillingAgreement | und
  */
 export function createBillingService({ db, payment }: CreateBillingServiceOptions) {
   // The last week already paid (or paid and refunded) for the plan's rental.
-  const lastPaidCycle = sql<number>`(
-    select coalesce(max(${payments.billingCycle}), 1) from ${payments}
-    where ${payments.rentalId} = ${billingAgreements.rentalId}
-      and ${payments.status} in ('succeeded', 'refunded')
-  )`.mapWith(Number);
+  const lastPaidCycle = sql<number>`(${db
+    .select({ cycle: sql`coalesce(max(${payments.billingCycle}), 1)` })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.rentalId, billingAgreements.rentalId),
+        inArray(payments.status, paidPaymentStatuses),
+      ),
+    )})`.mapWith(Number);
 
   async function endPlan(
     agreement: BillingAgreementRow,
@@ -194,11 +201,15 @@ export function createBillingService({ db, payment }: CreateBillingServiceOption
    * - A paid week moves the plan to the start of the week after it.
    * - A declined week is retried after `billingRetryDelayMs`, and after
    *   `maxFailedBillingAttempts` declines in a row the plan is paused.
+   * - A charge the provider holds (`payment_pending`) pauses the plan, since
+   *   the provider forgets the charge's key after a few hours and a later run
+   *   could then charge the week again. Someone checks it at the provider.
    * - A rental that is over (cancelled, completed, gear returned, or past its
    *   end date) ends its plan without a charge.
-   * - When the outcome is unknown (the provider was unreachable, the money is
-   *   on hold, or saving failed), the plan is left as is and the next run
-   *   replays the same charge, which the provider does not take twice.
+   * - When the outcome is unknown (the provider was unreachable or saving
+   *   failed) or the fault is ours (no provider configured), the plan is left
+   *   as is and the next run replays the same charge, which the provider does
+   *   not take twice.
    *
    * One plan failing never stops the run; each plan's outcome is listed.
    */
@@ -262,44 +273,27 @@ export function createBillingService({ db, payment }: CreateBillingServiceOption
       });
 
       // Anything but a decline means the week was paid, even if refunded since.
+      // The payment service moved the plan on with the payment.
       if (charged.success && charged.data.status !== "failed") {
-        const saved = await attempt(
-          db
-            .update(billingAgreements)
-            .set({
-              failedAttempts: 0,
-              nextChargeAt: billingCycleStartsAt(due.startDate, billingCycle + 1),
-              updatedAt: now,
-            })
-            .where(
-              and(eq(billingAgreements.id, agreement.id), eq(billingAgreements.status, "active")),
-            ),
-        );
-        // A plan that failed to move on is due again, and the next run finds
-        // this week paid and moves it on without charging.
-        results.push({ ...base, outcome: saved.ok ? "charged" : "retry_later", billingCycle });
+        results.push({ ...base, outcome: "charged", billingCycle });
         continue;
       }
 
-      // Only a recorded decline, or a charge the business cannot make at all,
+      const code = charged.success ? undefined : charged.error.code;
+      const reason = charged.success ? charged.data.failureReason : charged.error.message;
+      const held = code === "payment_pending";
+
+      // Only a recorded decline, or a charge the customer's plan cannot make,
       // counts against the plan. Anything else is retried as the same attempt.
-      const failure = charged.success
-        ? { counts: true, reason: charged.data.failureReason }
-        : {
-            counts:
-              charged.error.code === "provider_refused" ||
-              charged.error.code === "no_saved_payment_method" ||
-              charged.error.code === "provider_not_configured",
-            reason: charged.error.message,
-          };
-
-      if (!failure.counts) {
-        results.push({ ...base, outcome: "retry_later", billingCycle, reason: failure.reason });
+      const counts =
+        charged.success || code === "provider_refused" || code === "no_saved_payment_method";
+      if (!counts && !held) {
+        results.push({ ...base, outcome: "retry_later", billingCycle, reason });
         continue;
       }
 
-      const failedAttempts = agreement.failedAttempts + 1;
-      const pause = failedAttempts >= maxFailedBillingAttempts;
+      const failedAttempts = counts ? agreement.failedAttempts + 1 : agreement.failedAttempts;
+      const pause = held || failedAttempts >= maxFailedBillingAttempts;
       const saved = await attempt(
         db
           .update(billingAgreements)
@@ -318,7 +312,7 @@ export function createBillingService({ db, payment }: CreateBillingServiceOption
         ...base,
         outcome: !saved.ok ? "retry_later" : pause ? "paused" : "declined",
         billingCycle,
-        reason: failure.reason,
+        reason,
       });
     }
 

@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Payment, PaymentProvider } from "../schemas";
 import { amountSchema, currencyCodeSchema, paymentProviderSchema, paymentSchema } from "../schemas";
 import { attempt, createResult } from "../utils";
+import { billingCycleStartsAt } from "./billing";
 
 export const createProviderOrderInputSchema = z.object({
   reference: z
@@ -901,9 +902,11 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
   /**
    * Charges one later week of a billing plan to the payment method saved at
    * checkout, at the rental's weekly subtotal, and records the outcome on that
-   * week's payment row. A week already paid is returned as is, so the billing
-   * routine can rerun a week safely. A declined week is recorded as `failed`
-   * and charged afresh by the next attempt, on the same row.
+   * week's payment row. A paid week moves the plan on to the next week in the
+   * same transaction, so a paid week and its plan never disagree. A week
+   * already paid is returned as is, so the billing routine can rerun a week
+   * safely. A declined week is recorded as `failed` and charged afresh by the
+   * next attempt, on the same row.
    *
    * Only a recorded decline or an outright refusal (`provider_refused`) means
    * no money moved. Any other failure leaves the outcome unknown, so the caller
@@ -920,6 +923,7 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
           .select({
             agreement: billingAgreements,
             number: rentals.number,
+            startDate: rentals.startDate,
             weeklySubtotal: rentals.weeklySubtotal,
           })
           .from(billingAgreements)
@@ -1040,6 +1044,19 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
           .update(rentals)
           .set({ paymentStatusSnapshot: outcome.status, updatedAt: now })
           .where(eq(rentals.id, agreement.rentalId)),
+        // A paid week clears the declines and makes the next week due when it starts.
+        ...(paid
+          ? [
+              db
+                .update(billingAgreements)
+                .set({
+                  failedAttempts: 0,
+                  nextChargeAt: billingCycleStartsAt(plan.startDate, input.billingCycle + 1),
+                  updatedAt: now,
+                })
+                .where(eq(billingAgreements.id, agreement.id)),
+            ]
+          : []),
       ]),
     );
     if (!saved.ok) return err("failed_to_save_payment", "Failed to save payment", saved.error);
