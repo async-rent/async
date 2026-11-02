@@ -1,4 +1,3 @@
-import type { StartPaymentInput } from "@async-rent/core";
 import { html } from "hono/html";
 
 /**
@@ -10,13 +9,6 @@ export const paymentPagePaths = {
   approved: "/payments/approved",
   cancelled: "/payments/cancelled",
 } as const;
-
-export type PaymentReturnUrls = Pick<StartPaymentInput, "returnUrl" | "cancelUrl">;
-
-export const paymentReturnUrls = (origin: string): PaymentReturnUrls => ({
-  returnUrl: new URL(paymentPagePaths.approved, origin).href,
-  cancelUrl: new URL(paymentPagePaths.cancelled, origin).href,
-});
 
 // `html` escapes every interpolated value.
 const page = (title: string, message: string) =>

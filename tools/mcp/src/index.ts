@@ -10,8 +10,9 @@ import {
 import { drizzle } from "drizzle-orm/d1";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { approvedPage, cancelledPage, paymentPagePaths, paymentReturnUrls } from "./payment-pages";
+import { approvedPage, cancelledPage, paymentPagePaths } from "./pages/payment";
 import { createMcpServer } from "./server";
+import { paymentReturnUrls } from "./shared/payments";
 import type { ToolContext } from "./shared/tools";
 
 // Composes core with the payment providers this Worker's secrets configure.

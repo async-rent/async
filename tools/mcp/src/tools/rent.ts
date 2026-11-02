@@ -41,11 +41,11 @@ async function createOwnRental(
   return async.rental.createRental({ ...details, cartId: cart.data.id });
 }
 
-export const createRental: Tool = (server, context) => {
+export const rent: Tool = (server, context) => {
   server.registerTool(
-    "create_rental",
+    "rent",
     {
-      title: "Create rental",
+      title: "Rent",
       description:
         "Place a rental from the basket last quoted with quote_rental in the same location, with the customer's contact, delivery address and rental dates. The cart is emptied and its stock reserved; the rental starts as pending_payment with the quoted totals frozen. Call quote_rental first and confirm the totals with the customer. Returns the rental and its number, e.g. AR-2026-7KQ4M2, for start_payment, get_rental and cancel_rental.",
       inputSchema,

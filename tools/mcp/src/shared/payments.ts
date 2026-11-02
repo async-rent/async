@@ -1,7 +1,16 @@
-import type { Payment, Rental } from "@async-rent/core";
+import type { Payment, Rental, StartPaymentInput } from "@async-rent/core";
 import { paymentSchema } from "@async-rent/core";
 import type { z } from "zod";
+import { paymentPagePaths } from "../pages/payment";
 import type { CoreResult, ToolContext } from "./tools";
+
+export type PaymentReturnUrls = Pick<StartPaymentInput, "returnUrl" | "cancelUrl">;
+
+/** This Worker's payment pages on `origin`, for the provider to send the customer back to. */
+export const paymentReturnUrls = (origin: string): PaymentReturnUrls => ({
+  returnUrl: new URL(paymentPagePaths.approved, origin).href,
+  cancelUrl: new URL(paymentPagePaths.cancelled, origin).href,
+});
 
 /**
  * A payment as its customer sees it. The provider's order and charge ids stay
