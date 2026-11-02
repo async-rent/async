@@ -44,7 +44,7 @@ type Input = z.infer<typeof inputSchema>;
 
 const outputSchema = z.object({
   cart: cartSchema.describe(
-    "The basket priced exactly as the website's cart shows it. create_rental places a rental from this cart.",
+    "The basket priced exactly as the website's cart shows it. rent places a rental from this cart.",
   ),
   startDate,
   endDate,
@@ -78,7 +78,7 @@ async function quoteBasket(
 }
 
 // A half-written basket must never become a rental nobody quoted, so a failed
-// quote leaves the cart empty and create_rental refuses it as cart_is_empty.
+// quote leaves the cart empty and rent refuses it as cart_is_empty.
 async function discardBasket(
   { async }: ToolContext,
   cartId: string,
@@ -96,7 +96,7 @@ export const quoteRental: Tool = (server, context) => {
     {
       title: "Quote rental",
       description:
-        "Price a basket of gear in one location for a rental period, with the same totals the website shows. This replaces the user's cart in that location with exactly these items. totalDueToday is the first week plus deposit and delivery; weeklySubtotal is then billed every week until the rental is cancelled. Prices are integers in the location currency's minor unit, e.g. cents. Fails if a product is not rented there or not enough is in stock; a failed quote leaves the cart empty, so quote again before create_rental.",
+        "Price a basket of gear in one location for a rental period, with the same totals the website shows. This replaces the user's cart in that location with exactly these items. totalDueToday is the first week plus deposit and delivery; weeklySubtotal is then billed every week until the rental is cancelled. Prices are integers in the location currency's minor unit, e.g. cents. Fails if a product is not rented there or not enough is in stock; a failed quote leaves the cart empty, so quote again before rent.",
       inputSchema,
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },

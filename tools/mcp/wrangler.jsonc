@@ -16,8 +16,15 @@
     },
   ],
   // Clerk is the OAuth authorization server: it signs users in and issues the
-  // access tokens this Worker verifies.
-  "secrets": { "required": ["CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] },
+  // access tokens this Worker verifies. PayPal takes the payments the tools start.
+  "secrets": {
+    "required": [
+      "CLERK_PUBLISHABLE_KEY",
+      "CLERK_SECRET_KEY",
+      "PAYPAL_CLIENT_ID",
+      "PAYPAL_CLIENT_SECRET",
+    ],
+  },
   "env": {
     "dev": {
       "name": "async-rent-mcp-dev",
@@ -28,7 +35,14 @@
           "database_id": "eaf08e17-dbae-4820-be5d-31e41b5dbd63",
         },
       ],
-      "secrets": { "required": ["CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] },
+      "secrets": {
+        "required": [
+          "CLERK_PUBLISHABLE_KEY",
+          "CLERK_SECRET_KEY",
+          "PAYPAL_CLIENT_ID",
+          "PAYPAL_CLIENT_SECRET",
+        ],
+      },
     },
     "staging": {
       "name": "async-rent-mcp-staging",
@@ -39,7 +53,14 @@
           "database_id": "129d6859-a153-4f65-bd7a-b69a142fd426",
         },
       ],
-      "secrets": { "required": ["CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] },
+      "secrets": {
+        "required": [
+          "CLERK_PUBLISHABLE_KEY",
+          "CLERK_SECRET_KEY",
+          "PAYPAL_CLIENT_ID",
+          "PAYPAL_CLIENT_SECRET",
+        ],
+      },
     },
   },
 }
