@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ToolContext } from "./tools";
+import type { ToolContext } from "./shared/tools";
 import { tools } from "./tools";
 
 export function createMcpServer(context: ToolContext): McpServer {

@@ -1,5 +1,5 @@
-import type { Tool } from "./tool";
-import { toToolResult } from "./tool";
+import type { Tool } from "../shared/tools";
+import { toToolResult } from "../shared/tools";
 
 export const listLocations: Tool = (server, { async }) => {
   server.registerTool(
