@@ -64,6 +64,8 @@ export const billingAgreements = sqliteTable(
     status: text("status", { enum: billingAgreementStatusValues }).notNull().default("active"),
     nextChargeAt: integer("next_charge_at", { mode: "timestamp_ms" }),
     cancelledAt: integer("cancelled_at", { mode: "timestamp_ms" }),
+    /** Charges in a row that failed since the last one that paid; billing pauses at a limit. */
+    failedAttempts: integer("failed_attempts").notNull().default(0),
     ...timestamps,
   },
   (table) => [

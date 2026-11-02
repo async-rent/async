@@ -2,6 +2,8 @@ import {
   attempt,
   captureProviderOrderInputSchema,
   captureProviderOrderResult,
+  chargeSavedPaymentMethodInputSchema,
+  chargeSavedPaymentMethodResult,
   createProviderOrderInputSchema,
   createProviderOrderResult,
   createResult,
@@ -13,6 +15,8 @@ import {
 import type {
   CaptureProviderOrderInput,
   CaptureProviderOrderResult,
+  ChargeSavedPaymentMethodInput,
+  ChargeSavedPaymentMethodResult,
   CreateProviderOrderInput,
   CreateProviderOrderResult,
   GetProviderOrderInput,
@@ -39,6 +43,13 @@ export interface CreatePayPalAdapterOptions {
   environment?: PayPalEnvironment;
   /** Defaults to the global `fetch`. */
   fetch?: PayPalFetch;
+  /**
+   * Saves the customer's PayPal account in PayPal's vault when they pay, so
+   * later weeks can be charged without them. Defaults to `true`, since weekly
+   * billing needs it; the PayPal app must have vaulting enabled. Turn it off
+   * for an app that cannot vault, and later weeks fail to charge.
+   */
+  savePaymentMethods?: boolean;
 }
 
 /**
@@ -143,9 +154,29 @@ const captureSchema = z.object({
 
 type Capture = z.infer<typeof captureSchema>;
 
+// Where PayPal reports the account it saved with a charge. Anything else under
+// `payment_source` is ignored, and a shape we do not know reads as nothing saved.
+const paymentSourceSchema = z
+  .object({
+    paypal: z
+      .object({
+        attributes: z
+          .object({
+            vault: z
+              .object({ id: z.string().optional(), status: z.string().optional() })
+              .optional(),
+          })
+          .optional(),
+      })
+      .optional(),
+  })
+  .optional()
+  .catch(undefined);
+
 const orderSchema = z.object({
   id: z.string(),
   status: z.string().optional(),
+  payment_source: paymentSourceSchema,
   purchase_units: z
     .array(
       z.object({
@@ -220,6 +251,7 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
   const baseUrl = baseUrls[options.environment ?? "sandbox"];
   const send = options.fetch ?? globalFetch;
   const credentials = toBasicCredentials(options.clientId, options.clientSecret);
+  const savePaymentMethods = options.savePaymentMethods ?? true;
 
   async function request(url: string, init: RequestInit): Promise<PayPalReply> {
     // Called inside `then` so a `fetch` that throws synchronously still lands in `attempt`.
@@ -273,7 +305,9 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     const amount = toPayPalAmount(order.data.amount, order.data.currency);
     if (!amount.success) return amount;
 
-    const reply = await call("/v2/checkout/orders", { body: toOrderBody(order.data, amount.data) });
+    const reply = await call("/v2/checkout/orders", {
+      body: toOrderBody(order.data, amount.data, savePaymentMethods),
+    });
     if (reply.kind !== "answered") return err(...toReplyError("create the order", reply));
 
     const created = createdOrderSchema.safeParse(reply.body);
@@ -331,7 +365,9 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
 
     // The reply may be a replay of a capture made up to 6 hours ago, which
     // has since been refunded, so it is read fresh unless it can no longer change.
-    return readLatestCapture(first, changeableCaptureStatuses);
+    const latest = await readLatestCapture(first, changeableCaptureStatuses);
+
+    return withSavedPaymentMethod(latest, toSavedPaymentMethodId(order.data));
   }
 
   async function getOrder(input: GetProviderOrderInput): Promise<GetProviderOrderResult> {
@@ -366,7 +402,11 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
 
     const first = toFirstCapture(order.data);
     // The order was just read, so only a held capture is worth asking about again.
-    if (first) return readLatestCapture(first, pendingCaptureStatuses);
+    if (first) {
+      const latest = await readLatestCapture(first, pendingCaptureStatuses);
+
+      return withSavedPaymentMethod(latest, toSavedPaymentMethodId(order.data));
+    }
     // A completed order always carries its capture, so one without is not a shape we know.
     if (order.data.status === "COMPLETED") {
       return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
@@ -457,7 +497,53 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     return latest.success && latest.data.id === refund.id ? latest.data : refund;
   }
 
-  return { createOrder, captureOrder, getOrder, refund };
+  /**
+   * Charges a vaulted PayPal account in one step: an order paid with the
+   * vault id is created and captured at once, with no customer approval. The
+   * caller's idempotency key goes to PayPal, which replays the first reply
+   * for the same key for 6 hours.
+   */
+  async function chargeSavedPaymentMethod(
+    input: ChargeSavedPaymentMethodInput,
+  ): Promise<ChargeSavedPaymentMethodResult> {
+    const { ok, err } = chargeSavedPaymentMethodResult;
+
+    const charge = chargeSavedPaymentMethodInputSchema.safeParse(input);
+    if (!charge.success) return err("invalid_request", "Invalid PayPal charge", charge.error);
+
+    const amount = toPayPalAmount(charge.data.amount, charge.data.currency);
+    if (!amount.success) return amount;
+
+    const reply = await call("/v2/checkout/orders", {
+      body: toSavedChargeBody(charge.data, amount.data),
+      requestId: charge.data.idempotencyKey,
+    });
+
+    // A declined one-step charge is refused before PayPal keeps an order.
+    const declined =
+      reply.kind === "refused" && !reply.step ? toDeclineReason(reply.failure) : undefined;
+    if (declined) return ok({ outcome: { status: "failed", failureReason: declined } });
+    if (reply.kind !== "answered") {
+      return err(...toReplyError("charge the saved PayPal account", reply));
+    }
+
+    const order = orderSchema.safeParse(reply.body);
+    if (!order.success) {
+      return err("provider_response_invalid", "PayPal sent an unexpected charge", order.error);
+    }
+
+    const first = toFirstCapture(order.data);
+    if (!first) {
+      return err("provider_response_invalid", `PayPal order ${order.data.id} has no capture`);
+    }
+
+    const captured = await readLatestCapture(first, pendingCaptureStatuses);
+    if (!captured.success) return captured;
+
+    return ok({ externalOrderId: order.data.id, outcome: captured.data });
+  }
+
+  return { createOrder, captureOrder, getOrder, refund, chargeSavedPaymentMethod };
 }
 
 // Calls the global `fetch` unbound, which Workers require.
@@ -557,10 +643,48 @@ function toReasonSuffix(details: { reason: string } | undefined): string {
   return details ? ` (${details.reason})` : "";
 }
 
+// The vault id PayPal saved with an order's charge, once it is usable. Pure.
+function toSavedPaymentMethodId(order: z.infer<typeof orderSchema>): string | undefined {
+  const vault = order.payment_source?.paypal?.attributes?.vault;
+
+  return vault?.status === "VAULTED" ? vault.id : undefined;
+}
+
+// Adds the saved account to a capture that took the money. Pure.
+function withSavedPaymentMethod(
+  result: CaptureProviderOrderResult,
+  savedPaymentMethodId: string | undefined,
+): CaptureProviderOrderResult {
+  if (!savedPaymentMethodId || !result.success || result.data.status !== "succeeded") {
+    return result;
+  }
+
+  return captureProviderOrderResult.ok({ ...result.data, savedPaymentMethodId });
+}
+
+// Pure.
+function toSavedChargeBody(
+  charge: ChargeSavedPaymentMethodInput,
+  amount: { currency_code: string; value: string },
+) {
+  return {
+    intent: "CAPTURE",
+    purchase_units: [
+      {
+        reference_id: charge.reference,
+        description: `Async rental ${charge.reference}`,
+        amount,
+      },
+    ],
+    payment_source: { paypal: { vault_id: charge.savedPaymentMethodId } },
+  };
+}
+
 // Pure.
 function toOrderBody(
   order: CreateProviderOrderInput,
   amount: { currency_code: string; value: string },
+  savePaymentMethods: boolean,
 ) {
   return {
     intent: "CAPTURE",
@@ -581,6 +705,18 @@ function toOrderBody(
           return_url: order.returnUrl,
           cancel_url: order.cancelUrl,
         },
+        // Saved only once the charge succeeds, for the merchant to charge later.
+        ...(savePaymentMethods
+          ? {
+              attributes: {
+                vault: {
+                  store_in_vault: "ON_SUCCESS",
+                  usage_type: "MERCHANT",
+                  customer_type: "CONSUMER",
+                },
+              },
+            }
+          : {}),
       },
     },
   };

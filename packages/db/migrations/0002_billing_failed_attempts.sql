@@ -1,0 +1,1 @@
+ALTER TABLE `billing_agreements` ADD `failed_attempts` integer DEFAULT 0 NOT NULL;

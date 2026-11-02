@@ -15,6 +15,13 @@
       "when": 1793480166313,
       "tag": "0001_rental_cart_id",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793614946075,
+      "tag": "0002_billing_failed_attempts",
+      "breakpoints": true
     }
   ]
 }

@@ -29,6 +29,12 @@ export const billingAgreementSchema = z
     status: billingAgreementStatusSchema.default("active"),
     nextChargeAt: dateTimeSchema.optional().describe("When the next weekly charge is due."),
     cancelledAt: dateTimeSchema.optional().describe("When the agreement was cancelled."),
+    failedAttempts: z
+      .number()
+      .int()
+      .nonnegative()
+      .default(0)
+      .describe("Charges in a row that failed since the last one that paid."),
   })
   .extend(timestampsSchema.shape);
 

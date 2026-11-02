@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { createTestDatabase } from "../../tests/database";
 import {
   captureProviderOrderResult,
+  chargeSavedPaymentMethodResult,
   createPaymentService,
   createProviderOrderResult,
   duplicateCaptureSchema,
@@ -51,9 +52,19 @@ function setup() {
     refundProviderPaymentResult.ok(),
   );
 
+  const chargeSavedPaymentMethod = vi.fn<PaymentProviderAdapter["chargeSavedPaymentMethod"]>(
+    async ({ idempotencyKey }) =>
+      chargeSavedPaymentMethodResult.ok({
+        externalOrderId: `order_${idempotencyKey}`,
+        outcome: { status: "succeeded", externalPaymentId: `capture_${idempotencyKey}` },
+      }),
+  );
+
   const service = createPaymentService({
     db: database.db,
-    providers: { paypal: { createOrder, captureOrder, getOrder, refund } },
+    providers: {
+      paypal: { createOrder, captureOrder, getOrder, refund, chargeSavedPaymentMethod },
+    },
   });
 
   const rentalRow = (id: string) =>

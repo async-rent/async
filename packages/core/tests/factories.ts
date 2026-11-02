@@ -195,6 +195,7 @@ export function makeBillingAgreement(overrides: Partial<BillingAgreement> = {}):
     interval: "weekly",
     currency: "USD",
     status: "active",
+    failedAttempts: 0,
     createdAt: isoDateTime,
     ...overrides,
   };
