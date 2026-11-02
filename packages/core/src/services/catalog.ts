@@ -22,7 +22,7 @@ import type { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Category, Location, Product, ProductPrice } from "../schemas";
-import { categorySchema, locationSchema, productSchema } from "../schemas";
+import { amountSchema, categorySchema, locationSchema, productSchema } from "../schemas";
 import { attempt, createResult, groupBy, paginationSchema } from "../utils";
 
 export interface CreateCatalogServiceOptions {
@@ -54,6 +54,11 @@ export const productQuerySchema = z.object({
     ),
   categoryId: z.string().optional().describe("Only return products in this category."),
   locationId: z.string().optional().describe("Only return products rentable in this location."),
+  maxWeeklyPrice: amountSchema
+    .optional()
+    .describe(
+      "Only return products whose weekly price is at most this amount, in minor units; checked in the selected location when one is given, otherwise in any location.",
+    ),
   sort: productSortSchema.default("featured"),
   page: z.number().int().positive().max(100).default(1).describe("1-based page number."),
   // One bound parameter per product id; 48 stays under D1's 100-parameter statement limit.
@@ -159,6 +164,13 @@ const rentedIn = (locationId: string): SQL => sql`exists (
 const rentedAnywhere: SQL = sql`exists (
   select 1 from ${productPrices}
   where ${productPrices.productId} = ${products.id}
+)`;
+
+const pricedAtMost = (maxWeeklyPrice: number, locationId: string | undefined): SQL => sql`exists (
+  select 1 from ${productPrices}
+  where ${productPrices.productId} = ${products.id}
+    and ${productPrices.weeklyPrice} <= ${maxWeeklyPrice}
+    ${locationId ? sql`and ${productPrices.locationId} = ${locationId}` : sql``}
 )`;
 
 // SQLite's lower() only handles ASCII (D1 has no ICU).
@@ -336,13 +348,14 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
   async function searchProducts(input: SearchProductsInput): Promise<SearchProductsResult> {
     const { ok, err } = searchProductsResult;
-    const { q, categoryId, locationId, sort, page, pageSize } = input;
+    const { q, categoryId, locationId, maxWeeklyPrice, sort, page, pageSize } = input;
 
     const where = and(
       eq(products.status, "active"),
       rentedAnywhere,
       categoryId ? eq(products.categoryId, categoryId) : undefined,
       locationId ? rentedIn(locationId) : undefined,
+      maxWeeklyPrice === undefined ? undefined : pricedAtMost(maxWeeklyPrice, locationId),
       ...searchWords(q).map(matchesWord),
     );
 
