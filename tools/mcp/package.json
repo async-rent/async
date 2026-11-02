@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@async-rent/core": "workspace:*",
+    "@async-rent/payment": "workspace:*",
     "@clerk/hono": "catalog:",
     "@clerk/mcp-tools": "catalog:",
     "@modelcontextprotocol/sdk": "catalog:",

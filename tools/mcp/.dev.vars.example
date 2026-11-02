@@ -2,3 +2,8 @@
 # Enable "Dynamic client registration" under OAuth applications in the Clerk Dashboard.
 CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
+
+# PayPal sandbox REST app that takes the payments start_payment opens.
+# Enable vaulting on the app, since later weeks are charged to the saved account.
+PAYPAL_CLIENT_ID=
+PAYPAL_CLIENT_SECRET=
