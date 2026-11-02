@@ -26,39 +26,130 @@ export const captureProviderOrderInputSchema = z.object({
 
 export type CaptureProviderOrderInput = z.infer<typeof captureProviderOrderInputSchema>;
 
+export const getProviderOrderInputSchema = z.object({
+  externalOrderId: z.string().describe("Provider-side order to look up."),
+});
+
+export type GetProviderOrderInput = z.infer<typeof getProviderOrderInputSchema>;
+
 export const refundProviderPaymentInputSchema = z.object({
-  externalPaymentId: z.string().describe("Provider-side payment to return."),
-  amount: amountSchema.describe("Amount to return, in the currency's minor unit."),
-  currency: currencyCodeSchema,
+  externalPaymentId: z
+    .string()
+    .describe("Provider-side payment to return, in full or for whatever it has left."),
 });
 
 export type RefundProviderPaymentInput = z.infer<typeof refundProviderPaymentInputSchema>;
+
+export const providerErrorCodeSchema = z
+  .enum([
+    "invalid_request",
+    "provider_unreachable",
+    "provider_refused",
+    "provider_response_invalid",
+    "payment_pending",
+  ])
+  .describe(
+    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, or it has not settled the capture or refund yet.",
+  );
+
+export type ProviderErrorCode = z.infer<typeof providerErrorCodeSchema>;
+
+export const captureOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("succeeded"),
+    externalPaymentId: z.string().describe("Provider-side payment the money settled as."),
+  }),
+  z.object({
+    status: z.literal("failed"),
+    failureReason: z.string().describe("Why the provider declined the charge, safe to show."),
+  }),
+]);
+
+export type CaptureOutcome = z.infer<typeof captureOutcomeSchema>;
+
+/** Result constructors for `PaymentProviderAdapter.createOrder`. */
+export const createProviderOrderResult = createResult(
+  z.object({
+    externalOrderId: z.string().describe("Provider-side order the customer approves."),
+    approvalUrl: z.url().describe("Where the customer approves the charge."),
+  }),
+  providerErrorCodeSchema,
+);
+
+export type CreateProviderOrderResult = z.infer<typeof createProviderOrderResult.schema>;
+
+/** Result constructors for `PaymentProviderAdapter.captureOrder`. */
+export const captureProviderOrderResult = createResult(
+  captureOutcomeSchema,
+  providerErrorCodeSchema,
+);
+
+export type CaptureProviderOrderResult = z.infer<typeof captureProviderOrderResult.schema>;
+
+export const providerOrderStateSchema = z.discriminatedUnion("status", [
+  z
+    .object({ status: z.literal("open") })
+    .describe(
+      "No money has moved: the order is unapproved, expired or void. Only a capture takes money, and nothing captures an order its payment no longer points at, so it is safe to replace.",
+    ),
+  z
+    .object({ status: z.literal("approved") })
+    .describe(
+      "The customer approved the order but it has no capture yet, so a capture may be under way.",
+    ),
+  ...captureOutcomeSchema.options,
+]);
+
+export type ProviderOrderState = z.infer<typeof providerOrderStateSchema>;
+
+/** Result constructors for `PaymentProviderAdapter.getOrder`. */
+export const getProviderOrderResult = createResult(
+  providerOrderStateSchema,
+  providerErrorCodeSchema,
+);
+
+export type GetProviderOrderResult = z.infer<typeof getProviderOrderResult.schema>;
+
+/** Result constructors for `PaymentProviderAdapter.refund`. */
+export const refundProviderPaymentResult = createResult(z.void(), providerErrorCodeSchema);
+
+export type RefundProviderPaymentResult = z.infer<typeof refundProviderPaymentResult.schema>;
 
 /**
  * What a payment company must do for the payment service. The service only
  * talks to this interface, so adding a provider means writing one adapter and
  * registering it by name; nothing here changes. Each method's input has a
- * schema above, so an adapter can validate what it receives.
+ * schema above, so an adapter can validate what it receives, and each returns
+ * a result built with the matching constructors above.
  *
- * An adapter throws when the provider cannot be reached. A charge the provider
- * refuses is not an error: `captureOrder` reports it as a `failed` outcome.
+ * An adapter never throws. A charge the provider declines is not an error
+ * either: `captureOrder` succeeds with a `failed` outcome, which the service
+ * records so the customer can try again. Money the provider holds but has not
+ * settled fails with `payment_pending`, so the service leaves the row as is.
  */
 export interface PaymentProviderAdapter {
   /** Opens a charge at the provider and returns where the customer approves it. */
-  createOrder(
-    input: CreateProviderOrderInput,
-  ): Promise<{ externalOrderId: string; approvalUrl: string }>;
+  createOrder(input: CreateProviderOrderInput): Promise<CreateProviderOrderResult>;
 
-  /** Takes the money once the customer has approved the order. */
-  captureOrder(input: CaptureProviderOrderInput): Promise<CaptureOutcome>;
+  /**
+   * Takes the money once the customer has approved the order. Capturing an
+   * order that was already captured returns that capture's outcome.
+   */
+  captureOrder(input: CaptureProviderOrderInput): Promise<CaptureProviderOrderResult>;
 
-  /** Returns a settled charge to the customer in full. */
-  refund(input: RefundProviderPaymentInput): Promise<void>;
+  /**
+   * Reads where an order stands without changing it. Only an `open` order is
+   * safe to replace; an `approved` one may be getting captured right now.
+   */
+  getOrder(input: GetProviderOrderInput): Promise<GetProviderOrderResult>;
+
+  /**
+   * Returns what is left of a settled charge to the customer: all of it,
+   * less anything already refunded at the provider. It takes no amount, since
+   * the provider knows what the charge has left.
+   */
+  refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult>;
 }
-
-export type CaptureOutcome =
-  | { status: "succeeded"; externalPaymentId: string }
-  | { status: "failed"; failureReason: string };
 
 /** The adapters a deployment has configured, keyed by provider name. */
 export type PaymentProviders = Partial<Record<PaymentProvider, PaymentProviderAdapter>>;
@@ -80,6 +171,12 @@ export type StartPaymentInput = z.infer<typeof startPaymentInputSchema>;
 export const confirmPaymentInputSchema = z.object({
   provider: paymentProviderSchema.describe("Provider that called back."),
   externalOrderId: z.string().describe("Provider-side order the customer approved."),
+  rentalId: z
+    .string()
+    .optional()
+    .describe(
+      "Rental the order was opened for, e.g. carried in the return URL. When the order was replaced, the rental's settled payment is returned instead of payment_not_found.",
+    ),
 });
 
 export type ConfirmPaymentInput = z.infer<typeof confirmPaymentInputSchema>;
@@ -97,15 +194,28 @@ export const listPaymentsInputSchema = z.object({
 export type ListPaymentsInput = z.infer<typeof listPaymentsInputSchema>;
 
 const startPaymentResult = createResult(
-  z.object({
-    payment: paymentSchema,
-    approvalUrl: z.url().describe("Where to send the customer to approve the charge."),
-  }),
+  z.discriminatedUnion("status", [
+    z
+      .object({
+        status: z.literal("awaiting_approval"),
+        payment: paymentSchema,
+        approvalUrl: z.url().describe("Where to send the customer to approve the charge."),
+      })
+      .describe("A fresh order the customer still has to approve."),
+    z
+      .object({ status: z.literal("paid"), payment: paymentSchema })
+      .describe(
+        "An earlier order the customer had approved was captured instead, so the rental is paid and there is nothing to approve.",
+      ),
+  ]),
   z.enum([
     "provider_not_configured",
     "rental_not_found",
     "rental_not_payable",
     "payment_already_started",
+    "payment_pending",
+    "payment_replaced",
+    "payment_captured_twice",
     "provider_request_failed",
     "failed_to_load_rental",
     "failed_to_save_payment",
@@ -121,6 +231,9 @@ const confirmPaymentResult = createResult(
   z.enum([
     "provider_not_configured",
     "payment_not_found",
+    "payment_pending",
+    "payment_replaced",
+    "payment_captured_twice",
     "provider_request_failed",
     "failed_to_load_payment",
     "failed_to_save_payment",
@@ -136,6 +249,7 @@ const refundPaymentResult = createResult(
   z.enum([
     "payment_not_found",
     "payment_not_refundable",
+    "refund_pending",
     "provider_not_configured",
     "provider_request_failed",
     "failed_to_load_payment",
@@ -155,11 +269,41 @@ const listPaymentsResult = createResult(
 export const listPaymentsResultSchema = listPaymentsResult.schema;
 export type ListPaymentsResult = z.infer<typeof listPaymentsResultSchema>;
 
+// Recording a provider's outcome on a pending payment, shared by confirm and start.
+const settlePaymentResult = createResult(
+  paymentSchema,
+  z.enum([
+    "payment_replaced",
+    "payment_captured_twice",
+    "failed_to_save_payment",
+    "payment_data_invalid",
+  ]),
+);
+
+export const duplicateCaptureSchema = z
+  .object({
+    paymentId: z.string().describe("Payment another order already paid."),
+    provider: paymentProviderSchema,
+    externalOrderId: z.string().describe("Order that took the second charge."),
+    externalPaymentId: z.string().describe("The second charge, to refund at the provider."),
+    refundError: z.unknown().describe("Why refunding the second charge automatically failed."),
+  })
+  .describe(
+    "The `cause` of a `payment_captured_twice` failure: a second charge no payment row records, which could not be refunded automatically and must be refunded at the provider.",
+  );
+
+export type DuplicateCapture = z.infer<typeof duplicateCaptureSchema>;
+
+type SettlePaymentResult = z.infer<typeof settlePaymentResult.schema>;
+
 /** The first weekly cycle: the amount captured at checkout. */
 const firstBillingCycle = 1;
 
 /** Statuses a first payment can be started again from (abandoned or declined). */
 const restartableStatuses = ["pending", "failed"] as const;
+
+/** Statuses a captured payment may still be recorded over (open, or a newer order declined). */
+const unpaidStatuses = ["pending", "failed"] as const;
 
 // Build a payment from its row. Pure.
 function toPayment(row: PaymentRow): Payment {
@@ -193,6 +337,11 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
    * Prepares a rental's first charge and hands back where the customer
    * approves it. Calling it again for an abandoned or declined attempt opens a
    * fresh order on the same payment row, because a rental has one row per cycle.
+   *
+   * An earlier order the customer already approved is captured first. If it
+   * turns out to be paid, the payment is recorded and returned as `paid`:
+   * callers should then show the rental as paid instead of sending the
+   * customer to the provider.
    */
   async function startPayment(input: StartPaymentInput): Promise<StartPaymentResult> {
     const { ok, err } = startPaymentResult;
@@ -228,22 +377,57 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       return err("payment_already_started", `Rental ${rental.number} already has a payment`);
     }
 
-    const order = await attempt(
-      adapter.createOrder({
-        reference: rental.number,
-        amount: rental.totalDueToday,
-        currency: rental.currency,
-        returnUrl: input.returnUrl,
-        cancelUrl: input.cancelUrl,
-      }),
-    );
-    if (!order.ok) {
+    // A pending row's order may already hold or have taken the customer's
+    // money, e.g. a capture held for review or one whose reply was lost.
+    // Replacing that order would orphan the money and let the customer pay
+    // twice, so the provider is asked first.
+    if (existing?.status === "pending") {
+      const previousAdapter = providers[existing.provider];
+      if (!previousAdapter) {
+        return err("provider_not_configured", `Provider ${existing.provider} is not configured`);
+      }
+
+      const lookup = { externalOrderId: existing.externalOrderId };
+      let previous: GetProviderOrderResult = await previousAdapter.getOrder(lookup);
+      // An approved order may be getting captured by a confirm right now, and
+      // replacing it would let both orders take money. Capturing it here too is
+      // safe, since a capture of the same order replays the first one.
+      if (previous.success && previous.data.status === "approved") {
+        previous = await previousAdapter.captureOrder(lookup);
+      }
+      if (!previous.success) {
+        return previous.error.code === "payment_pending"
+          ? err(
+              "payment_pending",
+              `Rental ${rental.number} has a payment the provider is still holding`,
+              previous.error,
+            )
+          : err("provider_request_failed", "The payment provider failed", previous.error);
+      }
+
+      if (previous.data.status === "succeeded") {
+        const settled = await settle(previousAdapter, existing, previous.data);
+        if (!settled.success) return settled;
+
+        // Already paid, so there is nothing for the customer to approve.
+        return ok({ status: "paid", payment: settled.data });
+      }
+    }
+
+    const order = await adapter.createOrder({
+      reference: rental.number,
+      amount: rental.totalDueToday,
+      currency: rental.currency,
+      returnUrl: input.returnUrl,
+      cancelUrl: input.cancelUrl,
+    });
+    if (!order.success) {
       return err("provider_request_failed", "The payment provider failed", order.error);
     }
 
     const charge = {
       provider: input.provider,
-      externalOrderId: order.value.externalOrderId,
+      externalOrderId: order.data.externalOrderId,
       externalPaymentId: null,
       amount: rental.totalDueToday,
       currency: rental.currency,
@@ -277,13 +461,18 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     const payment = parsePayment(row);
     if (!payment) return err("payment_data_invalid", `Payment ${row.id} has invalid data`);
 
-    return ok({ payment, approvalUrl: order.value.approvalUrl });
+    return ok({ status: "awaiting_approval", payment, approvalUrl: order.data.approvalUrl });
   }
 
   /**
    * Settles a payment once the customer is back from the provider. The order
    * id is what a provider callback carries, so that is what it resolves on. A
    * replayed callback finds the payment already settled and returns it as is.
+   *
+   * An order no payment points at any more (the customer opened a newer one,
+   * or an earlier order's late capture paid the rental) is never captured, so
+   * it takes no money. With `rentalId`, the customer then sees the rental's
+   * settled payment, or `payment_replaced` while a newer order is open.
    */
   async function confirmPayment(input: ConfirmPaymentInput): Promise<ConfirmPaymentResult> {
     const { ok, err } = confirmPaymentResult;
@@ -308,7 +497,11 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     if (!rows.ok) return err("failed_to_load_payment", "Failed to load payment", rows.error);
 
     const [row] = rows.value;
-    if (!row) return err("payment_not_found", `Order ${input.externalOrderId} not found`);
+    if (!row) {
+      return input.rentalId
+        ? confirmReplacedOrder(input.externalOrderId, input.rentalId)
+        : err("payment_not_found", `Order ${input.externalOrderId} not found`);
+    }
 
     if (row.status !== "pending") {
       const payment = parsePayment(row);
@@ -316,50 +509,182 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       return payment ? ok(payment) : err("payment_data_invalid", `Payment ${row.id} is invalid`);
     }
 
-    const captured = await attempt(adapter.captureOrder({ externalOrderId: row.externalOrderId }));
-    if (!captured.ok) {
-      return err("provider_request_failed", "The payment provider failed", captured.error);
+    const captured = await adapter.captureOrder({ externalOrderId: row.externalOrderId });
+    if (!captured.success) {
+      // Held money is not a provider fault: the payment stays pending and a
+      // later confirm settles it.
+      return captured.error.code === "payment_pending"
+        ? err("payment_pending", `Payment ${row.id} is on hold at the provider`, captured.error)
+        : err("provider_request_failed", "The payment provider failed", captured.error);
     }
 
-    const outcome = captured.value;
-    const now = new Date();
+    return settle(adapter, row, captured.data);
+  }
 
-    // The payment and its rental move together: a captured payment confirms the
-    // rental, and either outcome is copied onto it to avoid a join.
+  // A confirm for an order the rental's payment no longer points at. Nothing
+  // is captured: the rental's payment is returned once settled.
+  async function confirmReplacedOrder(
+    externalOrderId: string,
+    rentalId: string,
+  ): Promise<ConfirmPaymentResult> {
+    const { ok, err } = confirmPaymentResult;
+
+    const rows = await attempt(
+      db
+        .select()
+        .from(payments)
+        .where(and(eq(payments.rentalId, rentalId), eq(payments.billingCycle, firstBillingCycle)))
+        .limit(1),
+    );
+    if (!rows.ok) return err("failed_to_load_payment", "Failed to load payment", rows.error);
+
+    const [row] = rows.value;
+    if (!row) return err("payment_not_found", `Order ${externalOrderId} not found`);
+    if (row.status !== "succeeded" && row.status !== "refunded") {
+      return err(
+        "payment_replaced",
+        `Order ${externalOrderId} was replaced by order ${row.externalOrderId}`,
+      );
+    }
+
+    const payment = parsePayment(row);
+
+    return payment ? ok(payment) : err("payment_data_invalid", `Payment ${row.id} is invalid`);
+  }
+
+  /**
+   * Records a provider's outcome on a pending payment. The payment and its
+   * rental move together: a captured payment confirms the rental, and either
+   * outcome is copied onto it to avoid a join.
+   *
+   * `startPayment` may have swapped in a new order while the provider
+   * answered. Money taken is recorded anyway, on the order that took it, even
+   * over a decline of the newer order. A decline only counts for its own
+   * order, so a newer one the customer opened stays as it is
+   * (`payment_replaced`). Money taken after another order already paid is a
+   * second charge no row records, so it is refunded through `adapter` and the
+   * payment that stands is returned. Only if that refund does not complete
+   * does it fail with `payment_captured_twice`, whose cause is the
+   * `DuplicateCapture` to refund by hand.
+   */
+  async function settle(
+    adapter: PaymentProviderAdapter,
+    row: PaymentRow,
+    outcome: CaptureOutcome,
+  ): Promise<SettlePaymentResult> {
+    const { ok, err } = settlePaymentResult;
+
+    const now = new Date();
+    const paid = outcome.status === "succeeded";
+
     const saved = await attempt(
       db.batch([
         db
           .update(payments)
           .set(
-            outcome.status === "succeeded"
+            paid
               ? {
                   status: "succeeded",
+                  // The order that took the money, which may not be the one
+                  // the row points at now, nor at the same provider.
+                  provider: row.provider,
+                  externalOrderId: row.externalOrderId,
                   externalPaymentId: outcome.externalPaymentId,
+                  failureReason: null,
                   paidAt: now,
                   updatedAt: now,
                 }
               : { status: "failed", failureReason: outcome.failureReason, updatedAt: now },
           )
-          .where(and(eq(payments.id, row.id), eq(payments.status, "pending")))
+          .where(
+            paid
+              ? and(eq(payments.id, row.id), inArray(payments.status, unpaidStatuses))
+              : and(
+                  eq(payments.id, row.id),
+                  eq(payments.status, "pending"),
+                  eq(payments.provider, row.provider),
+                  eq(payments.externalOrderId, row.externalOrderId),
+                ),
+          )
           .returning(),
         db
           .update(rentals)
           .set(
-            outcome.status === "succeeded"
+            paid
               ? { status: "confirmed", paymentStatusSnapshot: "succeeded", updatedAt: now }
               : { paymentStatusSnapshot: "failed", updatedAt: now },
           )
-          .where(and(eq(rentals.id, row.rentalId), eq(rentals.status, "pending_payment"))),
+          .where(
+            and(
+              eq(rentals.id, row.rentalId),
+              eq(rentals.status, "pending_payment"),
+              // Only once the payment holds this outcome, so the rental never
+              // claims a payment the row does not record.
+              inArray(
+                rentals.id,
+                db
+                  .select({ rentalId: payments.rentalId })
+                  .from(payments)
+                  .where(
+                    and(
+                      eq(payments.id, row.id),
+                      eq(payments.provider, row.provider),
+                      eq(payments.externalOrderId, row.externalOrderId),
+                      paid
+                        ? and(
+                            eq(payments.status, "succeeded"),
+                            eq(payments.externalPaymentId, outcome.externalPaymentId),
+                          )
+                        : eq(payments.status, "failed"),
+                    ),
+                  ),
+              ),
+            ),
+          ),
+        db.select().from(payments).where(eq(payments.id, row.id)).limit(1),
       ]),
     );
     if (!saved.ok) return err("failed_to_save_payment", "Failed to save payment", saved.error);
 
-    const [[settled]] = saved.value;
-    // Another request settled it between the read and the write.
-    if (!settled) return err("failed_to_save_payment", "Payment was settled by another request");
+    const [[updated], , [current]] = saved.value;
+    if (!current) return err("failed_to_save_payment", `Payment ${row.id} no longer exists`);
 
-    const payment = parsePayment(settled);
-    if (!payment) return err("payment_data_invalid", `Payment ${settled.id} has invalid data`);
+    // Nothing was written when another request settled the same order first
+    // (its outcome stands) or when the payment moved on to another order.
+    const replaced =
+      current.provider !== row.provider || current.externalOrderId !== row.externalOrderId;
+    if (!updated && replaced) {
+      // A decline for an order nobody pays any more changes nothing.
+      if (!paid) {
+        return err(
+          "payment_replaced",
+          `Order ${row.externalOrderId} was replaced by order ${current.externalOrderId}`,
+        );
+      }
+
+      // Money no row records: the customer paid twice, so the second charge
+      // goes straight back. The provider keys the refund on the charge, so a
+      // retried refund never returns it twice.
+      const refunded = await adapter.refund({ externalPaymentId: outcome.externalPaymentId });
+      if (!refunded.success) {
+        const duplicate: DuplicateCapture = {
+          paymentId: row.id,
+          provider: row.provider,
+          externalOrderId: row.externalOrderId,
+          externalPaymentId: outcome.externalPaymentId,
+          refundError: refunded.error,
+        };
+
+        return err(
+          "payment_captured_twice",
+          `Order ${row.externalOrderId} took payment ${outcome.externalPaymentId}, but payment ${row.id} was already paid by order ${current.externalOrderId}, and refunding it failed; refund it at the provider`,
+          duplicate,
+        );
+      }
+    }
+
+    const payment = parsePayment(current);
+    if (!payment) return err("payment_data_invalid", `Payment ${current.id} has invalid data`);
 
     return ok(payment);
   }
@@ -384,15 +709,13 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
       return err("provider_not_configured", `Provider ${row.provider} is not configured`);
     }
 
-    const refunded = await attempt(
-      adapter.refund({
-        externalPaymentId: row.externalPaymentId,
-        amount: row.amount,
-        currency: row.currency,
-      }),
-    );
-    if (!refunded.ok) {
-      return err("provider_request_failed", "The payment provider failed", refunded.error);
+    const refunded = await adapter.refund({ externalPaymentId: row.externalPaymentId });
+    if (!refunded.success) {
+      // A refund the provider has not settled leaves the payment paid; asking
+      // again reads where it stands without refunding twice.
+      return refunded.error.code === "payment_pending"
+        ? err("refund_pending", `Refund of payment ${row.id} is still processing`, refunded.error)
+        : err("provider_request_failed", "The payment provider failed", refunded.error);
     }
 
     const now = new Date();
