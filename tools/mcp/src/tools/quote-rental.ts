@@ -1,4 +1,4 @@
-import type { Cart } from "@async-rent/core";
+import type { Cart, Err } from "@async-rent/core";
 import {
   cartSchema,
   createRentalInputSchema,
@@ -59,9 +59,10 @@ const toOutput =
 // The quote is the user's cart for the city, so the rental placed from it
 // freezes exactly these lines and totals, the same as a website checkout.
 async function quoteBasket(
-  { async, userId }: ToolContext,
+  context: ToolContext,
   { locationId, items }: Input,
 ): Promise<CoreResult<Cart>> {
+  const { async, userId } = context;
   const cart = await async.cart.getCartByUserAndLocation({ userId, locationId });
   if (!cart.success) return cart;
 
@@ -71,9 +72,22 @@ async function quoteBasket(
 
   const puts = await Promise.all(items.map((item) => async.cart.putItem({ cartId, ...item })));
   const [failed] = puts.flatMap((put) => (put.success ? [] : [put]));
-  if (failed) return failed;
+  if (failed) return discardBasket(context, cartId, failed);
 
   return async.cart.getCartById({ cartId });
+}
+
+// A half-written basket must never become a rental nobody quoted, so a failed
+// quote leaves the cart empty and create_rental refuses it as cart_is_empty.
+async function discardBasket(
+  { async }: ToolContext,
+  cartId: string,
+  failed: Err<string>,
+): Promise<Err<string>> {
+  const cleared = await async.cart.clearCart({ cartId });
+  if (!cleared.success) console.error(cleared.error);
+
+  return failed;
 }
 
 export const quoteRental: Tool = (server, context) => {
@@ -82,7 +96,7 @@ export const quoteRental: Tool = (server, context) => {
     {
       title: "Quote rental",
       description:
-        "Price a basket of gear in one location for a rental period, with the same totals the website shows. This replaces the user's cart in that location with exactly these items. totalDueToday is the first week plus deposit and delivery; weeklySubtotal is then billed every week until the rental is cancelled. Prices are integers in the location currency's minor unit, e.g. cents. Fails if a product is not rented there or not enough is in stock.",
+        "Price a basket of gear in one location for a rental period, with the same totals the website shows. This replaces the user's cart in that location with exactly these items. totalDueToday is the first week plus deposit and delivery; weeklySubtotal is then billed every week until the rental is cancelled. Prices are integers in the location currency's minor unit, e.g. cents. Fails if a product is not rented there or not enough is in stock; a failed quote leaves the cart empty, so quote again before create_rental.",
       inputSchema,
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
