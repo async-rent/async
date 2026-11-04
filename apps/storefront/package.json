@@ -17,6 +17,7 @@
     "@async-rent/core": "workspace:",
     "@async-rent/ui": "workspace:",
     "@clerk/tanstack-react-start": "catalog:",
+    "@remixicon/react": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/react-devtools": "catalog:",
     "@tanstack/react-query": "catalog:",

@@ -42,6 +42,9 @@
   --sidebar-accent-foreground: oklch(0.2103 0.0059 285.8852);
   --sidebar-border: oklch(0.9197 0.004 286.3202);
   --sidebar-ring: oklch(0.7057 0.0144 286.0246);
+  /* Brand accent: the dot on the Async wordmark. */
+  --signal: #00bfff;
+  --signal-soft: oklch(0.9771 0.0125 236.6197);
   --radius: 0.625rem;
   --shadow-x: 0;
   --shadow-y: 1px;
@@ -94,6 +97,8 @@
   --sidebar-accent-foreground: oklch(0.9851 0 0);
   --sidebar-border: oklch(1 0 0);
   --sidebar-ring: oklch(0.552 0.0153 285.8863);
+  --signal: #00bfff;
+  --signal-soft: oklch(0.2657 0.0626 242.6111);
   --radius: 0.625rem;
   --shadow-x: 0;
   --shadow-y: 1px;
@@ -145,6 +150,15 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
+  /* Design-file vocabulary (Paper "Async" file). Aliases of the roles above. */
+  --color-signal: var(--signal);
+  --color-signal-soft: var(--signal-soft);
+  --color-ink: var(--foreground);
+  --color-paper: var(--background);
+  --color-fog: var(--muted);
+  --color-slate: var(--muted-foreground);
+  --color-line: var(--border);
+
   --font-sans: "Figtree Variable", ui-sans-serif, sans-serif, system-ui;
   --font-heading: "Josefin Sans Variable", ui-serif, serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
@@ -169,7 +183,8 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-synthesis: none;
   }
   html {
     @apply font-sans;
