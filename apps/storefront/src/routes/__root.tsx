@@ -1,6 +1,8 @@
 import { HeadContent, Scripts, createRootRouteWithContext } from "@tanstack/react-router";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 
+import { SiteFooter } from "../components/site-footer";
+import { SiteHeader } from "../components/site-header";
 import ClerkProvider from "../integrations/clerk/provider";
 
 import TanStackRouterDevtools from "../integrations/tanstack-router/devtools";
@@ -56,7 +58,11 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <ClerkProvider>
-          {children}
+          <div className="flex min-h-svh flex-col">
+            <SiteHeader />
+            <main className="flex-1">{children}</main>
+            <SiteFooter />
+          </div>
           <TanStackDevtools
             config={{
               position: "bottom-right",
