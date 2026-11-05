@@ -8,23 +8,39 @@ import {
   SelectValue,
 } from "@async-rent/ui/components/select";
 import { RiMapPinLine } from "@remixicon/react";
+import { cn } from "cn";
 
-import { cities, defaultCitySlug } from "../lib/cities";
+import { useRentalPlan } from "../hooks/use-rental-plan";
+import { cityLabel } from "../lib/cities";
 
-const cityLabels = Object.fromEntries(
-  cities.map((city) => [city.slug, `${city.area}, ${city.name}`]),
-);
+interface CityPickerProps {
+  className?: string;
+}
 
 /**
- * Header city picker. Holds the choice locally until the catalog reads it
- * (#19/#20); the options are the seeded delivery cities.
+ * The visitor's delivery city. Options are the open locations from the
+ * catalog service; picking one switches prices and the cart to that city.
  */
-export function CityPicker() {
+export function CityPicker({ className }: CityPickerProps) {
+  const { locations, plan, setLocationId } = useRentalPlan();
+  const labels = Object.fromEntries(
+    locations.map((location) => [location.id, cityLabel(location)]),
+  );
+
   return (
-    <Select items={cityLabels} defaultValue={defaultCitySlug}>
+    <Select
+      items={labels}
+      value={plan.locationId}
+      onValueChange={(value) => {
+        if (typeof value === "string") setLocationId(value);
+      }}
+    >
       <SelectTrigger
         aria-label="Delivery city"
-        className="h-10 gap-2 rounded-full border-transparent px-3.5 text-xs shadow-none hover:bg-muted data-[size=default]:h-10"
+        className={cn(
+          "h-10 gap-2 rounded-full border-transparent px-3.5 text-xs shadow-none hover:bg-muted data-[size=default]:h-10",
+          className,
+        )}
       >
         <RiMapPinLine className="text-muted-foreground" />
         <SelectValue />
@@ -32,10 +48,10 @@ export function CityPicker() {
       <SelectContent align="end" alignItemWithTrigger={false} className="min-w-52">
         <SelectGroup>
           <SelectLabel>Deliver to</SelectLabel>
-          {cities.map((city) => (
-            <SelectItem key={city.slug} value={city.slug}>
-              {city.name}
-              <span className="text-muted-foreground">{city.country}</span>
+          {locations.map((location) => (
+            <SelectItem key={location.id} value={location.id}>
+              {location.name}
+              <span className="text-muted-foreground">{location.country}</span>
             </SelectItem>
           ))}
         </SelectGroup>

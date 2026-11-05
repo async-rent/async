@@ -18,7 +18,9 @@
     "@remixicon/react": "catalog:",
     "class-variance-authority": "catalog:",
     "cn": "catalog:",
+    "date-fns": "catalog:",
     "react": "catalog:",
+    "react-day-picker": "catalog:",
     "shadcn": "catalog:",
     "tailwindcss": "catalog:",
     "tw-animate-css": "catalog:"

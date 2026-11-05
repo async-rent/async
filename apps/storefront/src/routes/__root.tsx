@@ -1,8 +1,12 @@
-import { HeadContent, Scripts, createRootRouteWithContext } from "@tanstack/react-router";
+import { Toaster } from "@async-rent/ui/components/toast";
+import { HeadContent, Outlet, Scripts, createRootRouteWithContext } from "@tanstack/react-router";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 
+import { CartDrawer } from "../components/cart/cart-drawer";
+import { CartDrawerProvider } from "../components/cart/cart-drawer-context";
 import { SiteFooter } from "../components/site-footer";
 import { SiteHeader } from "../components/site-header";
+import { storefrontQueryOptions } from "../hooks/use-rental-plan";
 import ClerkProvider from "../integrations/clerk/provider";
 
 import TanStackRouterDevtools from "../integrations/tanstack-router/devtools";
@@ -47,8 +51,26 @@ export const Route = createRootRouteWithContext<AppContext>()({
       },
     ],
   }),
+  // Cities and the visitor's rental plan: every page reads them through useRentalPlan.
+  loader: ({ context: { queryClient } }) => queryClient.ensureQueryData(storefrontQueryOptions),
   shellComponent: RootDocument,
+  component: RootLayout,
 });
+
+function RootLayout() {
+  return (
+    <CartDrawerProvider>
+      <div className="flex min-h-svh flex-col">
+        <SiteHeader />
+        <main className="flex-1">
+          <Outlet />
+        </main>
+        <SiteFooter />
+      </div>
+      <CartDrawer />
+    </CartDrawerProvider>
+  );
+}
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
@@ -58,11 +80,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <ClerkProvider>
-          <div className="flex min-h-svh flex-col">
-            <SiteHeader />
-            <main className="flex-1">{children}</main>
-            <SiteFooter />
-          </div>
+          <Toaster>{children}</Toaster>
           <TanStackDevtools
             config={{
               position: "bottom-right",
