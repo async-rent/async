@@ -102,6 +102,32 @@ function insertProduct(database: TestDatabase, fixture: ProductFixture): void {
   }
 }
 
+interface RentalFixture {
+  id: string;
+  locationId: string;
+  status: "pending_payment" | "confirmed" | "active" | "completed" | "cancelled";
+  items: { productId: string; quantity: number }[];
+}
+
+function insertRental({ sqlite }: TestDatabase, fixture: RentalFixture): void {
+  sqlite
+    .prepare(
+      `INSERT INTO rentals (id, number, contact_name, contact_email, address_line1, address_city,
+         address_country_code, location_id, currency, start_date, status)
+       VALUES (?, ?, 'Ada', 'ada@example.com', 'Jl. Pantai 1', 'Canggu', 'ID', ?, 'USD', '2026-01-05', ?)`,
+    )
+    .run(fixture.id, fixture.id.toUpperCase(), fixture.locationId, fixture.status);
+
+  fixture.items.forEach((item, position) => {
+    sqlite
+      .prepare(
+        `INSERT INTO rental_items (rental_id, position, product_id, name, slug, quantity, weekly_price)
+         VALUES (?, ?, ?, ?, ?, ?, 1000)`,
+      )
+      .run(fixture.id, position, item.productId, item.productId, item.productId, item.quantity);
+  });
+}
+
 /**
  * Four active products, one archived product and skewed per-city prices.
  *
@@ -365,6 +391,95 @@ describe("searchProducts", () => {
       "prd_oak",
       "prd_chair",
       "prd_smartdesk",
+    ]);
+  });
+
+  it("leaves out excluded categories, counting only what is left", async () => {
+    const { service } = setup();
+
+    const result = await service.searchProducts(
+      makeQuery({ excludeCategoryIds: ["cat_desks", "cat_lighting"] }),
+    );
+    if (!result.success) throw new Error(result.error.message);
+
+    expect(result.data.total).toBe(1);
+    expect(result.data.items.map((product) => product.id)).toEqual(["prd_chair"]);
+
+    const none = await service.searchProducts(makeQuery({ excludeCategoryIds: [] }));
+    if (!none.success) throw new Error(none.error.message);
+    expect(none.data.total).toBe(4);
+  });
+
+  it("puts the most rented first, counting only placed rentals in the selected city", async () => {
+    const context = setup();
+    insertRental(context, {
+      id: "rnt_bali_paid",
+      locationId: "loc_bali",
+      status: "active",
+      items: [{ productId: "prd_lamp", quantity: 3 }],
+    });
+    insertRental(context, {
+      id: "rnt_bali_returned",
+      locationId: "loc_bali",
+      status: "completed",
+      items: [{ productId: "prd_oak", quantity: 1 }],
+    });
+    // Neither an unpaid nor a cancelled order is demand.
+    insertRental(context, {
+      id: "rnt_bali_unpaid",
+      locationId: "loc_bali",
+      status: "pending_payment",
+      items: [{ productId: "prd_smartdesk", quantity: 5 }],
+    });
+    insertRental(context, {
+      id: "rnt_bali_cancelled",
+      locationId: "loc_bali",
+      status: "cancelled",
+      items: [{ productId: "prd_oak", quantity: 5 }],
+    });
+    // Lisbon's rentals only move Lisbon's order.
+    insertRental(context, {
+      id: "rnt_lisbon",
+      locationId: "loc_lisbon",
+      status: "confirmed",
+      items: [
+        { productId: "prd_smartdesk", quantity: 2 },
+        { productId: "prd_oak", quantity: 6 },
+      ],
+    });
+    const { service } = context;
+
+    const bali = await service.searchProducts(
+      makeQuery({ locationId: "loc_bali", sort: "popular" }),
+    );
+    if (!bali.success) throw new Error(bali.error.message);
+    expect(bali.data.items.map((product) => product.id)).toEqual([
+      "prd_lamp",
+      "prd_oak",
+      "prd_smartdesk",
+    ]);
+
+    const anywhere = await service.searchProducts(makeQuery({ sort: "popular" }));
+    if (!anywhere.success) throw new Error(anywhere.error.message);
+    expect(anywhere.data.items.map((product) => product.id)).toEqual([
+      "prd_oak",
+      "prd_lamp",
+      "prd_smartdesk",
+      "prd_chair",
+    ]);
+  });
+
+  it("falls back to featured, then name, while nothing has been rented", async () => {
+    const { service } = setup();
+
+    const result = await service.searchProducts(makeQuery({ sort: "popular" }));
+    if (!result.success) throw new Error(result.error.message);
+
+    expect(result.data.items.map((product) => product.id)).toEqual([
+      "prd_chair",
+      "prd_smartdesk",
+      "prd_lamp",
+      "prd_oak",
     ]);
   });
 
