@@ -6,13 +6,12 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@async-rent/ui/components/empty";
-import { Separator } from "@async-rent/ui/components/separator";
 import { Skeleton } from "@async-rent/ui/components/skeleton";
 import { SignInButton, useAuth } from "@clerk/tanstack-react-start";
-import { RiCheckLine } from "@remixicon/react";
 import { Link, createFileRoute } from "@tanstack/react-router";
 
 import { CheckoutForm } from "../../components/checkout/checkout-form";
+import { CheckoutSteps } from "../../components/checkout/checkout-steps";
 import { useCartDrawer } from "../../components/cart/cart-drawer-context";
 import { OrderSummary } from "../../components/checkout/order-summary";
 import { useCart } from "../../hooks/use-cart";
@@ -35,7 +34,7 @@ function CheckoutPage() {
   const contact = useCheckoutContact();
   const openOrder = useOpenOrder();
   const placed = openOrder.data ?? null;
-  const checkout = useCheckout(placed);
+  const checkout = useCheckout(placed?.number);
 
   if (!isLoaded || (isSignedIn && openOrder.isPending)) return <CheckoutSkeleton />;
   if (!isSignedIn) return <SignedOutCheckout />;
@@ -58,7 +57,7 @@ function CheckoutPage() {
 
   return (
     <div className={pageClass}>
-      <CheckoutSteps freeDelivery={order.summary.deliveryFee === 0} />
+      <CheckoutSteps current="checkout" freeDelivery={order.summary.deliveryFee === 0} />
       <div className="grid gap-12 pt-10 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start xl:grid-cols-[minmax(0,1fr)_440px] xl:gap-20">
         <div className="flex min-w-0 flex-col gap-10">
           <div className="flex flex-col gap-4">
@@ -88,38 +87,6 @@ function CheckoutPage() {
         />
       </div>
     </div>
-  );
-}
-
-const stepLabel = "font-mono text-[10px] tracking-[0.12em] uppercase";
-
-function CheckoutSteps({ freeDelivery }: { freeDelivery: boolean }) {
-  return (
-    <nav aria-label="Checkout steps" className="flex items-center justify-between gap-4">
-      <ol className="flex items-center gap-3">
-        <li className="flex items-center gap-2 text-muted-foreground">
-          <span className="flex size-4 items-center justify-center rounded-full bg-fog text-foreground">
-            <RiCheckLine className="size-2.5" />
-          </span>
-          <span className={stepLabel}>Cart</span>
-        </li>
-        <li aria-hidden className="w-7">
-          <Separator />
-        </li>
-        <li aria-current="step" className="flex items-center gap-2 text-primary">
-          <span className="flex size-4 items-center justify-center rounded-full bg-primary">
-            <span className="size-1.5 rounded-full bg-primary-foreground" />
-          </span>
-          <span className={stepLabel}>Checkout</span>
-        </li>
-      </ol>
-      {freeDelivery && (
-        <p className="flex items-center gap-2 text-muted-foreground">
-          <span aria-hidden className="size-1.5 rounded-full bg-primary" />
-          <span className={stepLabel}>Free delivery</span>
-        </p>
-      )}
-    </nav>
   );
 }
 

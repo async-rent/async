@@ -1,10 +1,17 @@
-import type { Rental } from "@async-rent/core";
+import {
+  billingCycleStartsAt,
+  isBillingCycleInRental,
+  type Payment,
+  type Rental,
+} from "@async-rent/core";
 import { auth, clerkClient } from "@clerk/tanstack-react-start/server";
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
 import { getRequestUrl, setResponseStatus } from "@tanstack/react-start/server";
 
 import { countryCodeOf } from "../lib/cities";
 import {
+  confirmRentalPaymentInputSchema,
+  orderNumberInputSchema,
   paymentReturnUrls,
   placeOrderInputSchema,
   rentalEndDate,
@@ -13,9 +20,12 @@ import {
   supportEmail,
   type CheckoutContact,
   type OpenOrder,
+  type OwnOrder,
+  type PaidOrder,
+  type PaymentReturn,
 } from "../lib/checkout";
 import { earliestDeliveryDate, latestDeliveryDate } from "../lib/rental-plan";
-import { getAsync, unwrap } from "./async";
+import { getAsync, unwrap, type ErrorMessages } from "./async";
 import { requireUserId } from "./auth";
 
 // Core's messages for these name cart, product and location ids.
@@ -40,6 +50,27 @@ const startPaymentMessages = {
 
 const listRentalsMessages = {
   failed_to_list_rentals: "We couldn't load your orders. Try again in a moment.",
+};
+
+const loadOrderMessages = {
+  rental_not_found: "We couldn't find that order.",
+  failed_to_load_rental: "We couldn't load your order. Try again in a moment.",
+  rental_data_invalid: `We couldn't load your order. Email ${supportEmail} and we'll sort it out.`,
+};
+
+// Codes the return page shows as a state of its own (held, replaced) are not here.
+const confirmPaymentMessages = {
+  ...loadOrderMessages,
+  failed_to_list_payments: "We couldn't load your payment. Try again in a moment.",
+  provider_not_configured:
+    "We couldn't reach PayPal to confirm your payment. Try again in a few minutes.",
+  provider_request_failed:
+    "We couldn't reach PayPal to confirm your payment. Try again in a moment.",
+  payment_not_found: "We couldn't find a payment for this order.",
+  failed_to_load_payment: "We couldn't load your payment. Try again in a moment.",
+  failed_to_save_payment: "We couldn't save your payment. Try again in a moment.",
+  payment_data_invalid: `Something is off with this payment. Email ${supportEmail} and we'll sort it out.`,
+  payment_captured_twice: `PayPal charged this order twice. Email ${supportEmail} and we'll refund the extra payment.`,
 };
 
 // The Clerk user, or `null` if Clerk can't be reached: the form then starts
@@ -79,6 +110,64 @@ function toOpenOrder(rental: Rental): OpenOrder {
     },
   };
 }
+
+// The PayPal adapter's decline reasons speak of "the customer"; the shopper reads them as "you".
+const declineReasons: Partial<Record<string, string>> = {
+  "The customer has not approved the payment at PayPal.":
+    "PayPal didn't get your approval for this payment.",
+  "PayPal needs the customer to approve the payment again.":
+    "PayPal needs you to approve the payment again.",
+  "The customer cannot pay for this order with PayPal.":
+    "PayPal can't take this payment from your account.",
+  "The customer's PayPal account is restricted.": "Your PayPal account is restricted.",
+  "The customer's PayPal account is locked or closed.": "Your PayPal account is locked or closed.",
+};
+
+function declineReason(payment: Payment): string {
+  const reason = payment.failureReason;
+  if (!reason) return "PayPal declined the payment.";
+  return declineReasons[reason] ?? reason;
+}
+
+const weekMs = 7 * 24 * 60 * 60 * 1000;
+
+// The first week after the one paid at checkout that starts today or later. Pure.
+function upcomingBillingCycle(startDate: string, today: string): number {
+  const elapsed = Date.parse(`${today}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`);
+  return Math.max(2, Math.ceil(elapsed / weekMs) + 1);
+}
+
+// A paid order with what its payment took and when the next week is billed.
+// The confirmation can be opened again weeks later, so the next charge is the
+// next one from today, not the second week.
+function toPaidOrder(rental: Rental, payment: Payment, now = new Date()): PaidOrder {
+  const order = toOpenOrder(rental);
+  const cycle = upcomingBillingCycle(rental.startDate, now.toISOString().slice(0, 10));
+  const billed = rental.status !== "completed" && isBillingCycleInRental(rental, cycle);
+
+  return {
+    ...order,
+    paid: payment.amount,
+    paidAt: payment.paidAt ?? payment.updatedAt ?? payment.createdAt,
+    delivered: rental.fulfillmentStatus === "delivered" || rental.fulfillmentStatus === "returned",
+    nextChargeDate: billed
+      ? billingCycleStartsAt(rental.startDate, cycle).toISOString().slice(0, 10)
+      : null,
+    chargesLeft: billed && order.weeks !== null ? order.weeks - cycle + 1 : null,
+  };
+}
+
+// One of the visitor's own orders by its number. Someone else's reads as not
+// found, so a guessed number reveals nothing.
+const loadOwnRental = createServerOnlyFn(
+  async (userId: string, number: string, messages: ErrorMessages): Promise<Rental> => {
+    const rental = unwrap(await getAsync().rental.getRentalByNumber({ number }), messages);
+    if (rental.userId === userId) return rental;
+
+    setResponseStatus(404);
+    throw new Error(messages.rental_not_found ?? loadOrderMessages.rental_not_found);
+  },
+);
 
 // The visitor's newest order still waiting for its first payment.
 const findOpenRental = createServerOnlyFn(async (userId: string): Promise<Rental | undefined> => {
@@ -214,23 +303,104 @@ export const startRentalPayment = createServerFn({ method: "POST" })
   .validator(startRentalPaymentInputSchema)
   .handler(async ({ data }) => {
     const userId = await requireUserId();
-    const async = getAsync();
-
-    const rental = unwrap(
-      await async.rental.getRentalByNumber({ number: data.number }),
-      startPaymentMessages,
-    );
-    // Someone else's order reads as not found, so a guessed number reveals nothing.
-    if (rental.userId !== userId) {
-      setResponseStatus(404);
-      throw new Error(startPaymentMessages.rental_not_found);
-    }
+    const rental = await loadOwnRental(userId, data.number, startPaymentMessages);
 
     const urls = paymentReturnUrls(getRequestUrl().origin, rental.number);
     const started = unwrap(
-      await async.payment.startPayment({ rentalId: rental.id, provider: "paypal", ...urls }),
+      await getAsync().payment.startPayment({ rentalId: rental.id, provider: "paypal", ...urls }),
       startPaymentMessages,
     );
 
     return { redirectUrl: started.status === "paid" ? urls.returnUrl : started.approvalUrl };
+  });
+
+/**
+ * Takes the payment for one of the visitor's orders once they are back from
+ * approving it at PayPal, and says where the order stands. It confirms the
+ * order the rental's checkout payment points at, which is the PayPal order
+ * last opened for it. The `token` PayPal adds to the URL never picks the
+ * order: it only has to match, so an approval of an order since replaced
+ * (another tab, an older PayPal window) never captures the newer one, which
+ * would record it as declined. Calling it again returns the same outcome
+ * without charging twice.
+ */
+export const confirmRentalPayment = createServerFn({ method: "POST" })
+  .validator(confirmRentalPaymentInputSchema)
+  .handler(async ({ data }): Promise<PaymentReturn> => {
+    const userId = await requireUserId();
+    const async = getAsync();
+
+    const rental = await loadOwnRental(userId, data.number, confirmPaymentMessages);
+    const { number } = rental;
+    // Capturing now would take money for an order that will never be delivered.
+    if (rental.status === "cancelled") return { outcome: "cancelled", number };
+
+    const payments = unwrap(
+      await async.payment.listPayments({ rentalId: rental.id }),
+      confirmPaymentMessages,
+    );
+    const checkoutPayment = payments.find((payment) => payment.billingCycle === 1);
+    if (!checkoutPayment) {
+      // Only an order still waiting can lack one; a paid order whose payment
+      // no longer reads back is a fault, not a payment to start.
+      if (rental.status !== "pending_payment") {
+        console.error(`Rental ${number} is ${rental.status} without a readable checkout payment`);
+        throw new Error(confirmPaymentMessages.payment_data_invalid);
+      }
+      return { outcome: "unfinished", order: toOpenOrder(rental) };
+    }
+    // A settled payment only reads back its outcome. An open one is captured
+    // only when PayPal says the visitor approved this very order.
+    if (checkoutPayment.status === "pending" && data.token !== checkoutPayment.externalOrderId) {
+      return { outcome: "unfinished", order: toOpenOrder(rental) };
+    }
+
+    const confirmed = await async.payment.confirmPayment({
+      provider: checkoutPayment.provider,
+      externalOrderId: checkoutPayment.externalOrderId,
+      rentalId: rental.id,
+    });
+    if (!confirmed.success) {
+      if (confirmed.error.code === "payment_pending") return { outcome: "processing", number };
+      if (confirmed.error.code === "payment_replaced") {
+        return { outcome: "unfinished", order: toOpenOrder(rental) };
+      }
+    }
+
+    const payment = unwrap(confirmed, confirmPaymentMessages);
+    switch (payment.status) {
+      case "succeeded":
+        return { outcome: "paid", order: toPaidOrder(rental, payment) };
+      case "failed":
+        return {
+          outcome: "declined",
+          order: toOpenOrder(rental),
+          reason: declineReason(payment),
+        };
+      case "refunded":
+        return { outcome: "refunded", number };
+      default:
+        return { outcome: "processing", number };
+    }
+  });
+
+/**
+ * One of the visitor's own orders by its number, and whether it is still
+ * waiting for its first payment. Read only, so the page PayPal sends
+ * cancelled payments to can show the order without touching its payment.
+ */
+export const getOwnOrder = createServerFn({ method: "GET" })
+  .validator(orderNumberInputSchema)
+  .handler(async ({ data }): Promise<OwnOrder> => {
+    const userId = await requireUserId();
+    const rental = await loadOwnRental(userId, data.number, loadOrderMessages);
+
+    const status =
+      rental.status === "pending_payment"
+        ? "awaiting_payment"
+        : rental.status === "cancelled"
+          ? "cancelled"
+          : "paid";
+
+    return { status, order: toOpenOrder(rental) };
   });
