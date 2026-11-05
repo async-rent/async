@@ -30,6 +30,7 @@ import {
   RiAddLine,
 } from "@remixicon/react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
 import { useState } from "react";
 
@@ -267,6 +268,7 @@ function RentalLength() {
 }
 
 function CartTotals({ cart }: { cart: Cart }) {
+  const { setOpen } = useCartDrawer();
   const { summary, currency } = cart;
   const money = (amount: number) => formatMoney(amount, currency);
 
@@ -302,9 +304,10 @@ function CartTotals({ cart }: { cart: Cart }) {
         </p>
       </dl>
       <div className="flex flex-col gap-2.5 px-7 pt-3.5 pb-6">
-        {/* A plain link: the checkout route arrives with #21. */}
-        <a
-          href="/checkout"
+        <Link
+          to="/checkout"
+          // Checkout can open the drawer too, so close it on the way there.
+          onClick={() => setOpen(false)}
           className={cn(
             buttonVariants({ size: "lg" }),
             "h-13 justify-between px-5 text-[13.5px] font-normal",
@@ -312,7 +315,7 @@ function CartTotals({ cart }: { cart: Cart }) {
         >
           Continue to checkout
           <RiArrowRightLine data-icon="inline-end" />
-        </a>
+        </Link>
         <p className="flex items-center justify-center gap-1.5 text-[10px] text-muted-foreground">
           <RiLockLine className="size-3" />
           {summary.deposit > 0 ? "Refundable deposit" : "No deposit"} · You can cancel anytime

@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@async-rent/core": "workspace:",
+    "@async-rent/payment": "workspace:",
     "@async-rent/ui": "workspace:",
     "@clerk/tanstack-react-start": "catalog:",
     "@remixicon/react": "catalog:",

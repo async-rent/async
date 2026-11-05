@@ -356,6 +356,9 @@ importers:
       '@async-rent/core':
         specifier: 'workspace:'
         version: link:../../packages/core
+      '@async-rent/payment':
+        specifier: 'workspace:'
+        version: link:../../packages/payment
       '@async-rent/ui':
         specifier: 'workspace:'
         version: link:../../packages/ui
