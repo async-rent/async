@@ -2,8 +2,9 @@ import type { Location } from "@async-rent/core";
 
 /**
  * Cities the storefront delivers to, mirroring the seeded `locations` rows.
- * Static until the catalog is wired (#19/#20); `area` is the neighbourhood the
- * header shows next to the city, taken from each location's description.
+ * The footer lists them as is; everything that rents reads the live locations
+ * from the catalog service and only borrows `area`, the neighbourhood shown
+ * next to the city, taken from each location's description.
  */
 export const cities = [
   { slug: "bali", name: "Bali", country: "Indonesia", area: "Canggu" },
@@ -15,3 +16,9 @@ export const cities = [
 export type CitySlug = (typeof cities)[number]["slug"];
 
 export const defaultCitySlug: CitySlug = "bali";
+
+/** "Canggu, Bali": the neighbourhood when the storefront knows one, else just the city. */
+export function cityLabel(location: Pick<Location, "slug" | "name">): string {
+  const area = cities.find((city) => city.slug === location.slug)?.area;
+  return area ? `${area}, ${location.name}` : location.name;
+}
