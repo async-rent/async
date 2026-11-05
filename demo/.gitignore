@@ -9,3 +9,7 @@ audio/music/*
 .DS_Store
 *.log
 __pycache__/
+audio/sfx/*
+!audio/sfx/*.json
+audio/kit/
+.tools/

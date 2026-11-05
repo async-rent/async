@@ -118,7 +118,9 @@ export const FACES = [
   '500 16px "Figtree Variable"',
   '600 16px "Figtree Variable"',
   '700 16px "Figtree Variable"',
+  '500 16px "Josefin Sans Variable"',
   '600 16px "Josefin Sans Variable"',
+  '700 16px "Josefin Sans Variable"',
   '400 16px "Geist Mono Variable"',
   '500 16px "Geist Mono Variable"',
 ];

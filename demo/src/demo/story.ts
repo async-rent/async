@@ -35,10 +35,12 @@ const SCROLL_KEYS: Key[] = [
   s(CUE.sayC + t(1.0), SCROLL.sayC),
   s(CUE.app2, SCROLL.sayC),
   s(CUE.app2 + t(0.95), SCROLL.app2, E.strongInOut),
-  s(CUE.tool5, SCROLL.app2),
-  s(CUE.tool5 + t(0.4), B.tool5.y + B.tool5.h - 516),
-  s(CUE.sayD + t(1.6), B.sayD.y + 52 - 516),
-  s(CUE.sayDEnd + t(0.4), SCROLL.end),
+  // after the payment the scroll rides the camera's pull-back as one move (its frames and curve, camera.ts), then
+  // follows the reply from rest to rest: no move starts at speed while another is under way
+  s(CUE.paid + t(0.8), SCROLL.app2),
+  s(CUE.tool5 + t(0.9), B.tool5.y + B.tool5.h - 516, E.strongInOut),
+  s(CUE.sayD + t(1.6), B.sayD.y + 52 - 516, E.stdInOut),
+  s(CUE.sayDEnd + t(0.4), SCROLL.end, E.stdInOut),
 ];
 export const scrollAt = (frame: number) => keyed(frame, SCROLL_KEYS);
 

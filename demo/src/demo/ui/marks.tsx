@@ -71,14 +71,28 @@ export const EndLockup: React.FC<{
   const cy = C_CENTRE.y;
   const g = `translate(${cx + d.x} ${cy + d.y}) scale(${k}) translate(${-cx} ${-cy})`;
   const s = `translate(${WORDMARK.dot.x} ${WORDMARK.dot.y}) scale(${cScale}) translate(${-WORDMARK.dot.x} ${-WORDMARK.dot.y})`;
+  // the window's right end, and its feathers as shares of its width (8 units on the reveal side, 3 against the C);
+  // once the reveal is through (edge past the A) the window is plain
+  const r = Math.min(LETTERS_RIGHT + 4, right);
+  const span = Math.max(1, r - edge);
+  const done = edge <= -2 && r >= LETTERS_RIGHT + 3;
+  const fIn = done ? 0 : Math.min(0.45, 8 / span);
+  const fOut = done ? 0 : Math.min(0.45, 3 / span);
   return (
     <svg width={w} height={height} viewBox={`0 0 ${WORDMARK.w} ${WORDMARK.h}`} fill="none" style={{ display: 'block', overflow: 'visible' }}>
       <defs>
-        <clipPath id="end-letters">
-          <rect x={edge} y={-10} width={Math.max(0, Math.min(LETTERS_RIGHT + 4, right) - edge)} height={WORDMARK.h + 20} />
-        </clipPath>
+        {/* the letters' window [edge, right], feathered at both ends: letters fade out from behind the C, never cut */}
+        <linearGradient id="end-letters-fade" gradientUnits="userSpaceOnUse" x1={edge} y1={0} x2={Math.max(edge + 1, r)} y2={0}>
+          <stop offset={0} stopColor="#FFFFFF" stopOpacity={0} />
+          <stop offset={fIn} stopColor="#FFFFFF" stopOpacity={1} />
+          <stop offset={1 - fOut} stopColor="#FFFFFF" stopOpacity={1} />
+          <stop offset={1} stopColor="#FFFFFF" stopOpacity={0} />
+        </linearGradient>
+        <mask id="end-letters" maskUnits="userSpaceOnUse" x={-10} y={-10} width={WORDMARK.w + 20} height={WORDMARK.h + 20}>
+          <rect x={edge} y={-10} width={Math.max(0, r - edge)} height={WORDMARK.h + 20} fill="url(#end-letters-fade)" />
+        </mask>
       </defs>
-      <g clipPath="url(#end-letters)">
+      <g mask="url(#end-letters)">
         {WORD.slice(1).map((p, i) => (
           <path key={i} d={p} fill={AS.text} />
         ))}

@@ -108,9 +108,9 @@ export const CUE = {
   sayD: t(27.3),
   sayDEnd: t(30.6),
   endFly: t(32.4), // the paid check leaves the chat and flies to the centre...
-  endLand: t(33.25), // ...where it is the dot of the C mark, the C forming round it
-  endWord: t(33.95), // the C settles into the wordmark as "Asyn" reveals from right to left
-  endTag: t(35.25),
+  endLand: t(33.25), // ...where it lands as the dot: the C and its dot pop out together, as one mark
+  endWord: t(33.8), // once the pop has settled: the C slides right into the wordmark as "Asyn" reveals from right to left
+  endTag: t(34.72), // the tagline (in the reel: beat 4 of the bar the mark pops on)
   end: t(37.5),
 };
 export const TOTAL = CUE.end;

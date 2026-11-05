@@ -1,0 +1,157 @@
+{
+ "edit": 1,
+ "track": "audio/music/dance_floor_coverr.mp3",
+ "analysis": "audio/music/dance_floor_coverr.track.json",
+ "licence": "audio/music/dance_floor_coverr.licence.json",
+ "sha256": "58a752bdad0967784d43640f0c4eb355baeee0336f896aebe5e5c939428c3e54",
+ "bpm": 128.0,
+ "beat_s": 0.46875,
+ "beats_per_bar": 4,
+ "film_t0": 0.25,
+ "film_bars": 25,
+ "phrase_len": 8,
+ "args": {
+  "bars": 25,
+  "reveal_bar": 22,
+  "end": "hit",
+  "start_bar": null,
+  "entry": null,
+  "film_t0": 0.25,
+  "fade": 2.5,
+  "arc": null,
+  "map": "1:3x6,7:9x15,22:29x4"
+ },
+ "reveal": {
+  "film_bar": 22,
+  "src_bar": 29,
+  "film_s": 39.625
+ },
+ "segments": [
+  {
+   "film_bar": 1,
+   "src_bar": 3,
+   "bars": 21,
+   "film_s": 0.25,
+   "src_from": 3.751,
+   "src_to": 43.126
+  },
+  {
+   "film_bar": 22,
+   "src_bar": 29,
+   "bars": 4,
+   "film_s": 39.625,
+   "src_from": 52.501,
+   "src_to": 60.002,
+   "join": {
+    "pre_ms": 8.0,
+    "tail_ms": 150.0
+   }
+  }
+ ],
+ "joins": [
+  {
+   "film_s": 39.625,
+   "film_bar": 22,
+   "src_in": 52.501,
+   "src_out": 43.126,
+   "tail_ms": 150.0
+  }
+ ],
+ "ending": {
+  "mode": "hit",
+  "bed_stops_film_s": 47.126,
+  "hit_film_s": 47.126,
+  "end_s": 47.126,
+  "release_s": 0.5,
+  "ring_s": 1.8,
+  "hold_s": 1.8
+ },
+ "track_dips": [],
+ "film": {
+  "downbeats": [
+   0.25,
+   2.125,
+   4.0,
+   5.875,
+   7.75,
+   9.625,
+   11.5,
+   13.375,
+   15.251,
+   17.124,
+   19.001,
+   20.874,
+   22.75,
+   24.624,
+   26.499,
+   28.375,
+   30.25,
+   32.125,
+   34.001,
+   35.875,
+   37.75,
+   39.625,
+   41.507,
+   43.375,
+   45.25,
+   47.126
+  ],
+  "accents": [
+   {
+    "t": 11.5,
+    "db": 8.5,
+    "band": "low"
+   },
+   {
+    "t": 11.851,
+    "db": 6.4,
+    "band": "mid"
+   },
+   {
+    "t": 11.967,
+    "db": 7.3,
+    "band": "high"
+   },
+   {
+    "t": 47.046,
+    "db": 7.8,
+    "band": "high"
+   }
+  ],
+  "entries": [
+   11.5,
+   39.625,
+   47.126
+  ],
+  "breaks": [],
+  "stops": [],
+  "phrases": [
+   11.5,
+   26.499
+  ],
+  "sections": [
+   {
+    "from": 0.25,
+    "to": 11.5,
+    "label": "intro"
+   },
+   {
+    "from": 11.5,
+    "to": 39.625,
+    "label": "body"
+   },
+   {
+    "from": 39.625,
+    "to": 47.126,
+    "label": "break"
+   }
+  ]
+ },
+ "key": "C minor",
+ "key_r": 0.812,
+ "cost": {
+  "total": 0.0,
+  "splices": 1
+ },
+ "muffled_bars": []
+}

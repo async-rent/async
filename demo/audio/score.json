@@ -1,16 +1,44 @@
 {
-  "key": "G major",
+  "key": "C minor",
   "music": {
-    "track": "audio/music/track.mp3",
+    "track": "audio/music/dance_floor_coverr.mp3",
     "edit": "audio/music/edit.json",
-    "licence": "audio/music/track.licence.json",
+    "licence": "audio/music/dance_floor_coverr.licence.json",
     "gain_db": 0
   },
-  "sfx": { "engine": "auto", "kit": "audio/kit.json", "python": null },
-  "stopdowns": { "auto": "kit", "add": [], "skip": [], "quiet_db": -7 },
-  "ending": { "mode": "stop", "at": "@end" },
+  "sfx": {
+    "engine": "auto",
+    "kit": "audio/kit.json",
+    "python": null
+  },
+  "stopdowns": {
+    "auto": "kit",
+    "add": [
+      {
+        "at": 690,
+        "weight": 1.5
+      },
+      {
+        "at": 2828,
+        "weight": 1.5
+      }
+    ],
+    "skip": [],
+    "quiet_db": -7
+  },
+  "ending": {
+    "mode": "hit",
+    "at": "@end"
+  },
   "typing": "auto",
   "payoff": "@reveal",
-  "mix": { "music": 1.0, "sfx": 1.0 },
-  "master": { "lufs": -14, "ceiling": 0.77, "fade": 1.3 }
+  "mix": {
+    "music": 1.0,
+    "sfx": 1.0
+  },
+  "master": {
+    "lufs": -14,
+    "ceiling": 0.77,
+    "fade": 1.3
+  }
 }
