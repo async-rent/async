@@ -60,7 +60,15 @@ export const placeOrderInputSchema = checkoutDetailsSchema.extend({
   weeks: rentalWeeksSchema,
 });
 
-export const startRentalPaymentInputSchema = z.object({ number: rentalNumberSchema });
+/** One of the visitor's own orders, by its number. */
+export const orderNumberInputSchema = z.object({ number: rentalNumberSchema });
+
+export const startRentalPaymentInputSchema = orderNumberInputSchema;
+
+/** The pages PayPal returns to carry the order number; anything else reads as none. */
+export const paymentReturnSearchSchema = z.object({
+  rental: rentalNumberSchema.optional().catch(undefined),
+});
 
 /** The contact details a signed-in visitor's form starts with. */
 export interface CheckoutContact {
@@ -98,6 +106,33 @@ export interface OrderView {
 export interface OpenOrder extends OrderView {
   number: string;
   details: CheckoutDetails;
+}
+
+/** An order whose first week is paid, as the confirmation shows it. */
+export interface PaidOrder extends OpenOrder {
+  /** What the payment at checkout took, in minor units. */
+  paid: number;
+  /** The day the next weekly charge falls, or `null` when no week is left to bill. */
+  nextChargeDate: string | null;
+}
+
+/**
+ * Where an order stands once the visitor is back from approving its payment.
+ * - `paid`: the payment went through and the order is confirmed.
+ * - `declined`: PayPal refused the payment; nothing was charged.
+ * - `processing`: PayPal holds the money but hasn't released it yet.
+ * - `unfinished`: the approval was for a payment since replaced, or none was started.
+ * - `cancelled`: the order was cancelled, so there is nothing to pay.
+ */
+export type PaymentReturn =
+  | { outcome: "paid"; order: PaidOrder }
+  | { outcome: "declined"; order: OpenOrder; reason: string }
+  | { outcome: "processing" | "unfinished" | "cancelled"; number: string };
+
+/** One of the visitor's orders, and whether it still waits for its first payment. */
+export interface OwnOrder {
+  status: "awaiting_payment" | "paid" | "cancelled";
+  order: OpenOrder;
 }
 
 /** The order the cart would become under the plan: only its available lines. */
@@ -166,10 +201,7 @@ export function rentalWeekCount(startDate: string, endDate: string | undefined):
   return Math.max(1, Math.ceil(days / 7));
 }
 
-/**
- * Where PayPal sends the customer back to, with the order number in `rental`.
- * The pages themselves arrive with #22.
- */
+/** Where PayPal sends the customer back to, with the order number in `rental`. */
 export const paymentReturnPaths = {
   approved: "/checkout/approved",
   cancelled: "/checkout/cancelled",

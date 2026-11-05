@@ -36,7 +36,7 @@ interface OrderSummaryProps {
 }
 
 // "for 3 more weeks", or "until you end the rental" for an open-ended one.
-function laterWeeksNote(weeks: number | null, weekly: string): string {
+export function laterWeeksNote(weeks: number | null, weekly: string): string {
   if (weeks === 1) return "One week, charged today.";
   if (weeks === null) return `First week, charged today. Then ${weekly} / week until you end it.`;
 
@@ -52,61 +52,13 @@ export function OrderSummary({
   isSubmitting,
   error,
 }: OrderSummaryProps) {
-  const { locations } = useRentalPlan();
-  // A placed order keeps its own city and day, whatever the plan says now.
-  const location = locations.find((candidate) => candidate.id === order.locationId);
-  const { summary, currency, lines, leftOut: left } = order;
+  const { summary, currency } = order;
   const money = (amount: number) => formatMoney(amount, currency);
-
-  const units = lines.reduce((sum, item) => sum + item.quantity, 0);
 
   return (
     <aside aria-labelledby="order-summary-title" className="flex flex-col gap-6 lg:sticky lg:top-8">
       <div className="flex flex-col rounded-xl bg-fog p-6">
-        <div className="flex items-center justify-between gap-4">
-          <h2 id="order-summary-title" className={eyebrow}>
-            Your order
-          </h2>
-          <p className={cn(eyebrow, "text-muted-foreground")}>
-            {units === 1 ? "1 item" : `${units} items`}
-          </p>
-        </div>
-        <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-signal" />
-          {[location && cityLabel(location), formatDeliveryDate(order.deliveryDate)]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-
-        <ul className="mt-5 flex flex-col">
-          {lines.map((item) => (
-            <SummaryLine
-              key={item.productId}
-              item={item}
-              currency={currency}
-              locationId={order.locationId}
-            />
-          ))}
-        </ul>
-        {left > 0 && (
-          <p className="pt-3 text-[11px] text-muted-foreground">
-            {left === 1 ? "1 item" : `${left} items`} in your cart {left === 1 ? "isn't" : "aren't"}{" "}
-            available{location ? ` in ${location.name}` : ""} right now and won't be included.
-          </p>
-        )}
-
-        <dl className="flex flex-col gap-2 pt-5 text-[11.5px]">
-          <SummaryRow label="Rent / week" value={money(summary.weeklySubtotal)} mono />
-          <SummaryRow
-            label="Delivery & setup"
-            value={summary.deliveryFee > 0 ? money(summary.deliveryFee) : "Free"}
-            mono={summary.deliveryFee > 0}
-          />
-          <SummaryRow label="Deposit" value={money(summary.deposit)} mono />
-          {summary.discount > 0 && (
-            <SummaryRow label="Discount" value={`−${money(summary.discount)}`} mono />
-          )}
-        </dl>
+        <OrderDetails order={order} titleId="order-summary-title" />
 
         <Separator className="my-5" />
 
@@ -170,23 +122,96 @@ export function OrderSummary({
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <Avatar size="lg">
-          <AvatarFallback>
-            <RiCustomerService2Line className="size-4" />
-          </AvatarFallback>
-        </Avatar>
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <p className={cn(eyebrow, "text-muted-foreground")}>Need a hand?</p>
-          <p className="truncate text-[13px]">
-            Customer Service ·{" "}
-            <a href={`mailto:${supportEmail}`} className="underline-offset-3 hover:underline">
-              {supportEmail}
-            </a>
-          </p>
-        </div>
-      </div>
+      <SupportContact />
     </aside>
+  );
+}
+
+interface OrderDetailsProps {
+  order: OrderView;
+  /** The id of the card's heading, for the landmark it sits in to point at. */
+  titleId: string;
+}
+
+/** The top of an order card: where and when it arrives, what is in it and what each part costs. */
+export function OrderDetails({ order, titleId }: OrderDetailsProps) {
+  const { locations } = useRentalPlan();
+  // A placed order keeps its own city and day, whatever the plan says now.
+  const location = locations.find((candidate) => candidate.id === order.locationId);
+  const { summary, currency, lines, leftOut: left } = order;
+  const money = (amount: number) => formatMoney(amount, currency);
+
+  const units = lines.reduce((sum, item) => sum + item.quantity, 0);
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-4">
+        <h2 id={titleId} className={eyebrow}>
+          Your order
+        </h2>
+        <p className={cn(eyebrow, "text-muted-foreground")}>
+          {units === 1 ? "1 item" : `${units} items`}
+        </p>
+      </div>
+      <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-signal" />
+        {[location && cityLabel(location), formatDeliveryDate(order.deliveryDate)]
+          .filter(Boolean)
+          .join(" · ")}
+      </p>
+
+      <ul className="mt-5 flex flex-col">
+        {lines.map((item) => (
+          <SummaryLine
+            key={item.productId}
+            item={item}
+            currency={currency}
+            locationId={order.locationId}
+          />
+        ))}
+      </ul>
+      {left > 0 && (
+        <p className="pt-3 text-[11px] text-muted-foreground">
+          {left === 1 ? "1 item" : `${left} items`} in your cart {left === 1 ? "isn't" : "aren't"}{" "}
+          available{location ? ` in ${location.name}` : ""} right now and won't be included.
+        </p>
+      )}
+
+      <dl className="flex flex-col gap-2 pt-5 text-[11.5px]">
+        <SummaryRow label="Rent / week" value={money(summary.weeklySubtotal)} mono />
+        <SummaryRow
+          label="Delivery & setup"
+          value={summary.deliveryFee > 0 ? money(summary.deliveryFee) : "Free"}
+          mono={summary.deliveryFee > 0}
+        />
+        <SummaryRow label="Deposit" value={money(summary.deposit)} mono />
+        {summary.discount > 0 && (
+          <SummaryRow label="Discount" value={`−${money(summary.discount)}`} mono />
+        )}
+      </dl>
+    </>
+  );
+}
+
+/** Where to reach a person, under an order card. */
+export function SupportContact() {
+  return (
+    <div className="flex items-center gap-3">
+      <Avatar size="lg">
+        <AvatarFallback>
+          <RiCustomerService2Line className="size-4" />
+        </AvatarFallback>
+      </Avatar>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <p className={cn(eyebrow, "text-muted-foreground")}>Need a hand?</p>
+        <p className="truncate text-[13px]">
+          Customer Service ·{" "}
+          <a href={`mailto:${supportEmail}`} className="underline-offset-3 hover:underline">
+            {supportEmail}
+          </a>
+        </p>
+      </div>
+    </div>
   );
 }
 

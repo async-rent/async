@@ -3,7 +3,7 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/r
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect } from "react";
 
-import type { CheckoutDetailsInput, OpenOrder } from "../lib/checkout";
+import type { CheckoutDetailsInput } from "../lib/checkout";
 import {
   getCheckoutContact,
   getOpenOrder,
@@ -55,9 +55,10 @@ export class CheckoutError extends Error {
  * Places the order and sends the visitor to PayPal. The order is placed once:
  * while it waits for payment, checkout shows it instead of the cart, and
  * another try only reopens its payment, since its cart is gone and its stock
- * is held.
+ * is held. `openNumber` is that waiting order's number: with it, submitting
+ * only pays it, which is also how a declined or cancelled payment is retried.
  */
-export function useCheckout(openOrder: OpenOrder | null) {
+export function useCheckout(openNumber: string | undefined) {
   const queryClient = useQueryClient();
   const { userId } = useAuth();
   const { plan } = useRentalPlan();
@@ -95,7 +96,7 @@ export function useCheckout(openOrder: OpenOrder | null) {
 
   const checkout = useMutation({
     mutationFn: async (details: CheckoutDetailsInput | undefined) => {
-      let number = openOrder?.number;
+      let number = openNumber;
       if (!number) {
         if (!details) throw new CheckoutError("place", new Error("Fill in your details first."));
         number = await placeOnce(details);
