@@ -40,6 +40,26 @@ export const equipmentFiltersSchema = z.object({
 
 export type EquipmentFilters = z.infer<typeof equipmentFiltersSchema>;
 
+/**
+ * What the first page looked up for the city and category filter. Later
+ * pages are handed it back, so "Load more" runs only the search.
+ */
+export const equipmentScopeSchema = z.object({
+  /** The city's currency, which prices every card. */
+  currency: z.string().length(3),
+  categoryId: z.string().optional(),
+  /** Without a category, the setups category, which the bundles section sells. */
+  excludeCategoryIds: z.array(z.string()).max(10).optional(),
+});
+
+export type EquipmentScope = z.infer<typeof equipmentScopeSchema>;
+
+/** The infinite query's page param: the page, and the scope once page 1 found it. */
+export interface EquipmentPageParam {
+  page: number;
+  scope?: EquipmentScope;
+}
+
 /** Everything one product card shows, priced for one city. */
 export interface EquipmentCard {
   id: string;

@@ -76,7 +76,7 @@ export function AllEquipment({ filters, categories, onFiltersChange }: AllEquipm
   const last = pages.at(-1);
   const total = last?.total ?? 0;
   // The city the cards were priced for, which trails a city switch until it loads.
-  const currency = last?.currency ?? "USD";
+  const currency = last?.scope.currency ?? "USD";
   const remaining = Math.max(total - cards.length, 0);
   const narrowed = activeFilterCount(filters) > 0 || filters.q !== undefined;
   const heading = categories.find((category) => category.slug === filters.category)?.name;

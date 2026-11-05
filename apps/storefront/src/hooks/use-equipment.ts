@@ -1,7 +1,9 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import type { EquipmentFilters } from "../lib/equipment";
+import type { EquipmentFilters, EquipmentPageParam } from "../lib/equipment";
 import { getEquipmentPage } from "../server/catalog";
+
+const firstPage: EquipmentPageParam = { page: 1 };
 
 /** "All equipment" cards for one city and set of filters, a page at a time. */
 export function equipmentQueryOptions(locationId: string, filters: EquipmentFilters) {
@@ -9,11 +11,12 @@ export function equipmentQueryOptions(locationId: string, filters: EquipmentFilt
 
   return infiniteQueryOptions({
     queryKey: ["equipment", locationId, { q, category, sort, maxPrice }],
-    queryFn: ({ pageParam }) =>
-      getEquipmentPage({ data: { locationId, q, category, sort, maxPrice, page: pageParam } }),
-    initialPageParam: 1,
-    // Core serves at most 100 pages.
-    getNextPageParam: (last) => (last.hasMore && last.page < 100 ? last.page + 1 : undefined),
+    queryFn: ({ pageParam: { page, scope } }) =>
+      getEquipmentPage({ data: { locationId, q, category, sort, maxPrice, page, scope } }),
+    initialPageParam: firstPage,
+    // Later pages reuse the city and category page 1 looked up. Core serves at most 100 pages.
+    getNextPageParam: (last): EquipmentPageParam | undefined =>
+      last.hasMore && last.page < 100 ? { page: last.page + 1, scope: last.scope } : undefined,
     staleTime: 5 * 60 * 1000,
   });
 }
