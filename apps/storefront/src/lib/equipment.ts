@@ -77,6 +77,21 @@ export function toEquipmentCard(product: Product, locationId: string): Equipment
 }
 
 /**
+ * Every card once, in first-seen order. Pages come by offset, so when the
+ * order shifts between loads (a new rental moves a product up "Most rented")
+ * a product can land on two pages.
+ */
+export function uniqueCards(cards: EquipmentCard[]): EquipmentCard[] {
+  const seen = new Set<string>();
+
+  return cards.filter((card) => {
+    if (seen.has(card.id)) return false;
+    seen.add(card.id);
+    return true;
+  });
+}
+
+/**
  * The search text core accepts: at most `maxSearchTokens` words. The hero
  * writes any text to the URL, so extra words are dropped rather than failing
  * the whole grid.

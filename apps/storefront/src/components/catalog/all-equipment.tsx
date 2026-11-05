@@ -27,6 +27,7 @@ import {
 import { Separator } from "@async-rent/ui/components/separator";
 import { Skeleton } from "@async-rent/ui/components/skeleton";
 import { Spinner } from "@async-rent/ui/components/spinner";
+import { toast } from "@async-rent/ui/components/toast";
 import { ToggleGroup, ToggleGroupItem } from "@async-rent/ui/components/toggle-group";
 import { RiAddLine, RiArrowDownLine, RiCloseLine, RiFilter3Line } from "@remixicon/react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
@@ -46,6 +47,7 @@ import {
   type EquipmentCard,
   type EquipmentFilters,
   type EquipmentSort,
+  uniqueCards,
 } from "../../lib/equipment";
 import { formatMoney } from "../../lib/money";
 import { ProductImage } from "../product-image";
@@ -70,7 +72,7 @@ export function AllEquipment({ filters, categories, onFiltersChange }: AllEquipm
   });
 
   const pages = query.data?.pages ?? [];
-  const cards = pages.flatMap((page) => page.cards);
+  const cards = uniqueCards(pages.flatMap((page) => page.cards));
   const last = pages.at(-1);
   const total = last?.total ?? 0;
   // The city the cards were priced for, which trails a city switch until it loads.
@@ -78,6 +80,17 @@ export function AllEquipment({ filters, categories, onFiltersChange }: AllEquipm
   const remaining = Math.max(total - cards.length, 0);
   const narrowed = activeFilterCount(filters) > 0 || filters.q !== undefined;
   const heading = categories.find((category) => category.slug === filters.category)?.name;
+
+  // The cards already shown stay put, so a failed page only needs a nudge to retry.
+  const loadMore = () =>
+    query.fetchNextPage().then((result) => {
+      if (!result.isFetchNextPageError) return;
+      toast.add({
+        title: "We couldn't load more equipment",
+        description: "Check your connection and press Load more again.",
+        type: "error",
+      });
+    });
 
   return (
     <section
@@ -194,11 +207,7 @@ export function AllEquipment({ filters, categories, onFiltersChange }: AllEquipm
             {query.hasNextPage && (
               <>
                 <Separator className="w-12" />
-                <Button
-                  variant="outline"
-                  disabled={query.isFetchingNextPage}
-                  onClick={() => query.fetchNextPage()}
-                >
+                <Button variant="outline" disabled={query.isFetchingNextPage} onClick={loadMore}>
                   Load {Math.min(equipmentPageSize, remaining) || equipmentPageSize} more
                   {query.isFetchingNextPage ? (
                     <Spinner data-icon="inline-end" />
