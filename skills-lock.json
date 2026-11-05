@@ -85,6 +85,12 @@
       "skillPath": "skills/durable-objects/SKILL.md",
       "computedHash": "f328205f9d11381902a160ace4622cd1ac9602acba00b091f6d63f59a6869900"
     },
+    "earshot": {
+      "source": "Leonxlnx/earshot",
+      "sourceType": "github",
+      "skillPath": "skills/earshot/SKILL.md",
+      "computedHash": "72c8dfc6401343cdb92f4f3c2df732f04575bd0f24e8b0b6b0bde028916ee15e"
+    },
     "emil-design-eng": {
       "source": "emilkowalski/skill",
       "sourceType": "github",
@@ -133,6 +139,12 @@
       "sourceType": "github",
       "skillPath": "packages/react-start/skills/react-start/SKILL.md",
       "computedHash": "2bdec68bf066fe3a9eef9670b1a0295e7c84cb686b4de04a22044958aea3180a"
+    },
+    "real-sound": {
+      "source": "Leonxlnx/earshot",
+      "sourceType": "github",
+      "skillPath": "skills/real-sound/SKILL.md",
+      "computedHash": "0376c695fdcdd5d2ff0a50f6be5f21c9981e68a6bcafc8f337563cc8856e38b2"
     },
     "review-animations": {
       "source": "emilkowalski/skill",
