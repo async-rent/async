@@ -7,12 +7,12 @@ tools to rent a cozy work setup in Bali for 2 weeks:
 2. **Prompt.** The prompt typed on `claude.ai/new` at macro scale, then the camera opens onto the whole page and the user sends it.
 3. **Tools.** Claude calls List locations and Search products, then renders the Async **setup picker** (an MCP App) in the chat.
 4. **Pick.** The user picks The full setup, the Arc Floor Lamp and the MX Master 3S for 2 weeks; the total rolls to $30 / week, and Continue sends the pick back to Claude.
-5. **Rent.** Claude calls Quote rental and Rent, then renders the Async **checkout** (an MCP App) with PayPal's gold button.
-6. **Pay.** The button is pressed, loads, and turns into "Payment approved · $500.00 paid with PayPal". The PayPal approval step is skipped.
-7. **Settle.** Claude calls Confirm payment and confirms the delivery, the next charge and the deposit.
-8. **End card.** The paid check flies out of the chat and becomes the dot of the Async wordmark, with "Your comfy setup, everywhere!" and async.rent under it.
+5. **Rent.** Claude calls Quote rental and Rent, then renders the Async **checkout** (an MCP App) with PayPal's white button.
+6. **Pay.** The button is pressed, loads, and turns into "Payment approved · $47.50 paid with PayPal". The PayPal approval step is skipped.
+7. **Settle.** Claude calls Confirm payment and confirms the delivery, the next charge and the $7.50 deposit.
+8. **End card.** The paid check flies out of the chat and becomes the blue dot of the Async "C" mark. The C settles into the wordmark as "Asyn" reveals from right to left, and "Your comfy setup, everywhere!" lands under it.
 
-Every string and number comes from the product. Prices and deposits are from `packages/db/seed.sql`, tool titles from `tools/mcp`, and the checkout copy from the storefront. See [BRIEF.md](BRIEF.md) for the sources and the exceptions to the house style.
+Every string comes from the product. Prices are from `packages/db/seed.sql` and the deposit is 25% of the weekly rent ($7.50), tool titles from `tools/mcp`, and the checkout copy from the storefront. See [BRIEF.md](BRIEF.md) for the sources and the exceptions to the house style.
 
 ## Where things are
 

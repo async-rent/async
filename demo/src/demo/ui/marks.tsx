@@ -43,6 +43,56 @@ export const AsyncWordmark: React.FC<{ height: number; color?: string; dot?: boo
   );
 };
 
+/** The wordmark's "c" (WORD[0]): its box centre in viewBox units. The app mark (assets/logo.svg) is this c scaled up. */
+export const C_CENTRE = { x: 150.74, y: 34.84 } as const;
+/** Where the "Asyn" letters end (their right edge, viewBox units): the reveal starts here, against the c. */
+export const LETTERS_RIGHT = 131;
+/** The c's left side (viewBox x). */
+export const C_LEFT = 138.77;
+
+/**
+ * The end card's lockup in one SVG: the "c" with its dot drawn as the C mark (scaled `k` about its centre and offset
+ * by `d` viewBox units), and "Asyn" revealed from right to left as `edge` (viewBox x) travels from LETTERS_RIGHT to 0.
+ * `cOpacity` / `cScale` bring the C's stroke in around a dot that is already there (scaled about the dot); `dot` hides
+ * the dot while a flying one is still on its way.
+ */
+export const EndLockup: React.FC<{
+  height: number;
+  k: number;
+  d: { x: number; y: number };
+  edge: number;
+  right?: number;
+  cOpacity: number;
+  cScale: number;
+  dot: boolean;
+}> = ({ height, k, d, edge, right = LETTERS_RIGHT + 4, cOpacity, cScale, dot }) => {
+  const w = (height * WORDMARK.w) / WORDMARK.h;
+  const cx = C_CENTRE.x;
+  const cy = C_CENTRE.y;
+  const g = `translate(${cx + d.x} ${cy + d.y}) scale(${k}) translate(${-cx} ${-cy})`;
+  const s = `translate(${WORDMARK.dot.x} ${WORDMARK.dot.y}) scale(${cScale}) translate(${-WORDMARK.dot.x} ${-WORDMARK.dot.y})`;
+  return (
+    <svg width={w} height={height} viewBox={`0 0 ${WORDMARK.w} ${WORDMARK.h}`} fill="none" style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        <clipPath id="end-letters">
+          <rect x={edge} y={-10} width={Math.max(0, Math.min(LETTERS_RIGHT + 4, right) - edge)} height={WORDMARK.h + 20} />
+        </clipPath>
+      </defs>
+      <g clipPath="url(#end-letters)">
+        {WORD.slice(1).map((p, i) => (
+          <path key={i} d={p} fill={AS.text} />
+        ))}
+      </g>
+      <g transform={g}>
+        <g transform={s} opacity={cOpacity}>
+          <path d={WORD[0]} fill={AS.text} />
+        </g>
+        {dot ? <circle cx={WORDMARK.dot.x} cy={WORDMARK.dot.y} r={WORDMARK.dot.r} fill={AS.signal} /> : null}
+      </g>
+    </svg>
+  );
+};
+
 const C_PATH =
   'M236.696 226.849C225.715 235.467 212.578 242.322 197.284 247.414C181.99 252.506 166.696 255.052 151.401 255.052C124.735 255.052 101.401 249.764 81.4014 239.188C61.4014 228.612 45.7151 213.923 34.3426 195.121C23.3622 175.928 17.872 153.405 17.872 127.552C17.872 101.699 23.7544 79.1764 35.5191 59.9829C47.6759 40.7893 63.3622 26.1004 82.5779 15.9161C102.186 5.34002 123.166 0.052002 145.519 0.052002C165.127 0.052002 182.578 2.79394 197.872 8.27781C213.558 13.7617 226.892 21.2041 237.872 30.605L210.813 65.8585C203.754 60.3746 195.127 55.4783 184.931 51.1695C174.735 46.8608 163.166 44.7064 150.225 44.7064C136.107 44.7064 122.97 48.4276 110.813 55.87C99.0485 62.9207 89.6367 72.7133 82.5779 85.2479C75.9112 97.7824 72.5779 111.884 72.5779 127.552C72.5779 142.437 76.1073 156.342 83.1661 169.269C90.2249 181.803 100.029 191.792 112.578 199.234C125.127 206.285 139.441 209.81 155.519 209.81C166.107 209.81 175.715 208.243 184.343 205.11C193.362 201.976 201.401 197.667 208.46 192.183L236.696 226.849Z';
 

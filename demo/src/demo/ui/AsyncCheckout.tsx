@@ -3,17 +3,16 @@ import { Img, staticFile } from 'remotion';
 import { AS, PP } from '../../brand/tokens';
 import { B, PAY_UI as U } from '../layout';
 import { appear, hold, state } from '../motion';
-import { ADDONS, CUE, DELIVERY, DELIVERY_FEE, DEPOSIT, DUE, PICK, RENTAL, SETUPS, WEEKLY, t } from '../script';
+import { ADDONS, CUE, DELIVERY, DELIVERY_FEE, DEPOSIT, DUE, money, moneyCents, PICK, RENTAL, SETUPS, WEEKLY, t } from '../script';
 import { Spinner } from './chat';
 import { Icon } from './icons';
 import { EYEBROW, MONO, UI } from './AsyncPicker';
 import { AsyncWordmark, PayPalWordmark } from './marks';
 
 // The Async checkout MCP App, rendered after rent: the rental's lines, the delivery, the storefront's order summary
-// and PayPal's own gold button. Pressing it loads, then the rental is paid (the PayPal approval itself is skipped).
+// and PayPal's own white button. Pressing it loads, then the rental is paid (the PayPal approval itself is skipped).
 
 const img = (f: string) => staticFile(`async/products/${f}`);
-const money = (v: number) => `$${v}`;
 
 const ITEMS = [
   { name: SETUPS[PICK.setup].name, image: SETUPS[PICK.setup].images[0], weekly: SETUPS[PICK.setup].weekly, cover: true },
@@ -166,7 +165,7 @@ export const AsyncCheckout: React.FC<{ frame: number; hideCheck?: boolean }> = (
           Then {money(WEEKLY)} / week for 1 more week.
         </div>
 
-        {/* PayPal's gold button: idle, hover, press, loading; then the paid state in its place */}
+        {/* PayPal's white button: idle, hover, press, loading; then the paid state in its place */}
         <div
           style={{
             position: 'absolute',
@@ -175,7 +174,7 @@ export const AsyncCheckout: React.FC<{ frame: number; hideCheck?: boolean }> = (
             top: U.btnY,
             height: U.btnH,
             borderRadius: 8,
-            background: hover > 0 ? `color-mix(in srgb, ${PP.goldHover} ${hover * 100}%, ${PP.gold})` : PP.gold,
+            background: hover > 0 ? `color-mix(in srgb, ${PP.whiteHover} ${hover * 100}%, ${PP.white})` : PP.white,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -212,7 +211,7 @@ export const AsyncCheckout: React.FC<{ frame: number; hideCheck?: boolean }> = (
           </div>
           <div style={{ position: 'absolute', left: 60, top: 5, opacity: state(frame, CUE.paid + 8, 16) }}>
             <div style={{ fontSize: 14, fontWeight: 600, lineHeight: '18px' }}>Payment approved</div>
-            <div style={{ fontSize: 11.5, color: AS.muted, lineHeight: '16px' }}>{money(DUE)}.00 paid with PayPal</div>
+            <div style={{ fontSize: 11.5, color: AS.muted, lineHeight: '16px' }}>{moneyCents(DUE)} paid with PayPal</div>
           </div>
         </div>
         <div style={{ position: 'absolute', left: 16, right: 16, top: U.btnY + U.btnH + 14, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6, fontSize: 11.5, color: AS.faint }}>

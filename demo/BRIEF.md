@@ -15,7 +15,7 @@ is skipped), and Claude confirms the rental.
 - **Async brand** from this repo: `apps/storefront/public/logo-wordmark.svg`, `assets/logo.svg`, the `#00BFFF` signal and
   the zinc dark theme (`packages/ui/src/styles.css`), Figtree / Josefin Sans / Geist Mono, the tagline
   "Your comfy setup, everywhere!".
-- **Async content** from `packages/db/seed.sql` (Bali prices, deposits, taglines, badges), `tools/mcp` (tool titles:
+- **Async content** from `packages/db/seed.sql` (Bali prices, taglines, badges), `tools/mcp` (tool titles:
   List locations, Search products, Quote rental, Rent, Confirm payment), `packages/payment` (PayPal, rental numbers
   `AR-YYYY-XXXXXX`), the storefront checkout and confirmation copy ("Due today", "Paid today", "Delivery & setup",
   "Secure checkout · Refundable deposit", "Then $30 / week for 1 more week.").
@@ -24,23 +24,26 @@ is skipped), and Claude confirms the rental.
 - **Third-party marks** via `scripts/logos.mjs`: Claude (spark, wordmark) and PayPal (wordmark), record in
   `public/logos/logos.json`.
 
-## The numbers on screen (all from the seed, Bali = base prices)
+## The numbers on screen (prices from the seed, Bali = base prices)
 
-| Item | / week | Deposit |
-|---|---|---|
-| The full setup | $25 | $400 |
-| Arc Floor Lamp | $3 | $30 |
-| MX Master 3S | $2 | $30 |
-| Delivery + setup (Bali, once) | $10 | |
+| Item | / week |
+|---|---|
+| The full setup | $25 |
+| Arc Floor Lamp | $3 |
+| MX Master 3S | $2 |
+| Delivery + setup (Bali, once) | $10 |
 
-Due today = first week $30 + deposit $460 + delivery $10 = **$500**, then $30 for the last week (Fri, 13 Nov).
+The deposit is 25% of the weekly rent (`DEPOSIT_RATE` in `src/demo/script.ts`): 25% of $30 = $7.50. This replaces
+the seed's per-product deposits for the demo.
+
+Due today = first week $30 + deposit $7.50 + delivery $10 = **$47.50**, then $30 for the last week (Fri, 13 Nov).
 Today is Thu, 5 Nov 2026; earliest delivery Fri, 6 Nov; 2 weeks end Thu, 19 Nov.
 
 ## Brand-supplied exceptions (lint-film `cinetic:brand-supplied`)
 
 The film shows two real products' screens, so their own looks override the house bans:
 - Claude.ai's serif greeting and replies (Source Serif 4 stands in for Anthropic Serif; Inter for Anthropic Sans).
-- Claude's terracotta spark and send button, PayPal's gold button, the macOS traffic lights (tagged `ui-state`).
+- Claude's terracotta spark and send button, PayPal's white button, the macOS traffic lights (tagged `ui-state`).
 - The Claude and PayPal marks are their current official files, used only to show what Async works with.
 
 ## Departures from the cinetic standard, on purpose
@@ -53,5 +56,5 @@ The film shows two real products' screens, so their own looks override the house
 
 ## Hard bans kept
 
-No invented copy or numbers (every price and string is the product's), no drawn stand-ins for products (real
+No invented copy or numbers (every price and string is the product's; the 25% deposit is from the brief), no drawn stand-ins for products (real
 photos), no sparkles or confetti, no fake metrics, no credits in the picture.

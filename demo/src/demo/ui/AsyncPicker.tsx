@@ -3,7 +3,7 @@ import { Img, staticFile } from 'remotion';
 import { AS, FONT } from '../../brand/tokens';
 import { B, PICK_UI as U } from '../layout';
 import { appear, count, hold, state } from '../motion';
-import { ADDONS, CUE, DELIVERY, DELIVERY_FEE, PICK, SETUPS, WEEKS, t } from '../script';
+import { ADDONS, CUE, DELIVERY, DELIVERY_FEE, depositFor, money, PICK, SETUPS, WEEKS, t } from '../script';
 import { Icon } from './icons';
 import { AsyncWordmark } from './marks';
 
@@ -15,7 +15,6 @@ export const UI: React.CSSProperties = { fontFamily: FONT.asyncUi, color: AS.tex
 export const MONO: React.CSSProperties = { fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' };
 export const EYEBROW: React.CSSProperties = { ...MONO, fontSize: 10.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: AS.faint };
 
-const money = (v: number) => `$${Math.round(v)}`;
 
 /** The selection check on a card or chip: a signal disc with an ink tick, grown in from 0.6 (never from zero). */
 export const Check: React.FC<{ p: number; size?: number }> = ({ p, size = 22 }) => (
@@ -60,11 +59,8 @@ export const AsyncPicker: React.FC<{ frame: number }> = ({ frame }) => {
     { f: CUE.pickLamp, v: SETUPS[0].weekly + ADDONS[0].weekly },
     { f: CUE.pickMouse, v: SETUPS[0].weekly + ADDONS[0].weekly + ADDONS[1].weekly },
   ]);
-  const deposit = count(frame, [
-    { f: CUE.pickSetup, v: SETUPS[0].deposit },
-    { f: CUE.pickLamp, v: SETUPS[0].deposit + ADDONS[0].deposit },
-    { f: CUE.pickMouse, v: SETUPS[0].deposit + ADDONS[0].deposit + ADDONS[1].deposit },
-  ]);
+  // the deposit is 25 % of the weekly rent, so it rolls with it ($6.25 -> $7 -> $7.50)
+  const deposit = depositFor(Math.round(weekly));
   const ready = state(frame, CUE.pickSetup, 14);
   const hover = hold(frame, CUE.continue - t(0.35), CUE.continue + t(0.1));
   const press = hold(frame, CUE.continue, CUE.continue + 4, 4, 10);
@@ -233,7 +229,7 @@ export const AsyncPicker: React.FC<{ frame: number }> = ({ frame }) => {
           <div style={{ position: 'absolute', right: 0, top: 8, whiteSpace: 'nowrap', fontSize: 12.5, color: AS.muted, opacity: 1 - state(frame, CUE.pickSetup, 6) }}>Pick a setup to see your total</div>
           <div style={{ opacity: state(frame, CUE.pickSetup + 5, 12) }}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 4 }}>
-            <span style={{ ...MONO, fontSize: 16, fontWeight: 500 }}>{money(weekly)}</span>
+            <span style={{ ...MONO, fontSize: 16, fontWeight: 500 }}>{money(Math.round(weekly))}</span>
             <span style={{ fontSize: 12, color: AS.muted }}>/ week</span>
           </div>
           <div style={{ fontSize: 11.5, color: AS.muted, marginTop: 1 }}>

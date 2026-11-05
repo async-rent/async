@@ -1,4 +1,4 @@
-// cinetic:brand-supplied Claude.ai's dark theme (its terracotta send button and spark), PayPal's gold button, macOS traffic lights, Claude's serif (Source Serif 4 standing in for Anthropic Serif); recorded in BRIEF.md
+// cinetic:brand-supplied Claude.ai's dark theme (its terracotta send button and spark), PayPal's white button, macOS traffic lights, Claude's serif (Source Serif 4 standing in for Anthropic Serif); recorded in BRIEF.md
 // Brand tokens: the only place a colour, face or type size is written down. Acts import these;
 // scripts/lint-film.mjs fails any hex colour that is not declared here.
 //
@@ -85,10 +85,10 @@ export const AS = {
   ok: '#00BFFF',
 };
 
-/** PayPal's checkout button: its gold and the hover gold, with the button's own label ink. */
+/** PayPal's checkout button: the white style (white and its hover grey), with the button's own label ink. */
 export const PP = {
-  gold: '#FFC439', // ui-state: a product's own control colour (Claude, PayPal, macOS), never the film's accent
-  goldHover: '#F2BA36', // ui-state: a product's own control colour (Claude, PayPal, macOS), never the film's accent
+  white: '#FFFFFF',
+  whiteHover: '#EDEDED',
   label: '#2C2E2F',
 };
 

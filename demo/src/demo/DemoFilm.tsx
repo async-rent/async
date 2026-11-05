@@ -8,7 +8,7 @@ import { CUE, H, LINES, TOTAL, W, t } from './script';
 import { scrollAt } from './story';
 import { PaidCheck } from './ui/AsyncCheckout';
 import { ClaudeApp } from './ui/ClaudeApp';
-import { AsyncWordmark, ClaudeSpark, WORDMARK } from './ui/marks';
+import { AsyncWordmark, C_CENTRE, C_LEFT, ClaudeSpark, EndLockup, LETTERS_RIGHT, WORDMARK } from './ui/marks';
 
 // The demo: the Async promise on the Bali world, a blur into the prompt typed at macro scale on Claude.ai, the
 // chat running the Async tools and apps, PayPal, and the paid check flying out to become the wordmark's dot.
@@ -123,10 +123,22 @@ const Stage: React.FC<{ frame: number; hideCheck: boolean }> = ({ frame, hideChe
 };
 
 // ---- the end card ----
-const LOCK = { h: 160, cy: 482 };
+// The paid check flies to the centre and becomes the dot of the C mark; the C forms round it, then settles into the
+// wordmark as "Asyn" reveals from right to left. The tagline lands under it.
+const LOCK = { h: 160, cy: 492 };
 const LOCK_W = (LOCK.h * WORDMARK.w) / WORDMARK.h;
 const LOCK_X = W / 2 - LOCK_W / 2;
-const DOT = { x: LOCK_X + (WORDMARK.dot.x * LOCK.h) / WORDMARK.h, y: LOCK.cy - LOCK.h / 2 + (WORDMARK.dot.y * LOCK.h) / WORDMARK.h, d: (2 * WORDMARK.dot.r * LOCK.h) / WORDMARK.h };
+const LOCK_Y = LOCK.cy - LOCK.h / 2;
+const UNIT = LOCK.h / WORDMARK.h; // film px per viewBox unit
+/** The C mark on its own: the wordmark's c at K_BIG, its centre on the frame's centre line. */
+const K_BIG = 3;
+const D_BIG = { x: (W / 2 - LOCK_X) / UNIT - C_CENTRE.x, y: (H / 2 - 20 - LOCK_Y) / UNIT - C_CENTRE.y };
+/** The dot on screen for a c scaled k and offset d (viewBox units). */
+const dotAt = (k: number, d: { x: number; y: number }) => ({
+  x: LOCK_X + UNIT * (C_CENTRE.x + d.x + k * (WORDMARK.dot.x - C_CENTRE.x)),
+  y: LOCK_Y + UNIT * (C_CENTRE.y + d.y + k * (WORDMARK.dot.y - C_CENTRE.y)),
+  d: 2 * WORDMARK.dot.r * k * UNIT,
+});
 
 /** Where the paid check sits on screen at a frame (film px), through the scroll and the camera. */
 const checkOnScreen = (frame: number) => {
@@ -140,33 +152,45 @@ const checkOnScreen = (frame: number) => {
 
 const EndCard: React.FC<{ frame: number }> = ({ frame }) => {
   if (frame < CUE.endFly) return null;
+  // 1. the flight: a bowed path from the check in the chat to the C mark's dot, growing to its size
   const from = checkOnScreen(CUE.endFly);
-  const p = prog(frame, CUE.endFly, CUE.endWord, E.stdInOut);
-  // a bowed flight up into the lockup's dot
-  const cx = mix(from.x, DOT.x, 0.5) + 80;
-  const cy = mix(from.y, DOT.y, 0.5) + 60;
-  const x = mix(mix(from.x, cx, p), mix(cx, DOT.x, p), p);
-  const y = mix(mix(from.y, cy, p), mix(cy, DOT.y, p), p);
-  const d = lmix(from.d, DOT.d, p) * (1 + 0.55 * Math.sin(Math.PI * p));
+  const to = dotAt(K_BIG, D_BIG);
+  const p = prog(frame, CUE.endFly, CUE.endLand, E.stdInOut);
+  const bx = mix(from.x, to.x, 0.5) + 70;
+  const by = mix(from.y, to.y, 0.5) + 70;
+  const x = mix(mix(from.x, bx, p), mix(bx, to.x, p), p);
+  const y = mix(mix(from.y, by, p), mix(by, to.y, p), p);
+  const size = lmix(from.d, to.d, p);
   const tick = 1 - clamp01((p - 0.1) / 0.45);
-  const word = prog(frame, CUE.endWord, CUE.endWord + t(0.75), E.glideOut);
+  const landed = frame >= CUE.endLand;
+  // 2. the C forms round the dot
+  const cA = prog(frame, CUE.endLand - 3, CUE.endLand + t(0.5), E.glideOut);
+  // 3. the C settles into the wordmark; "Asyn" reveals from right to left behind it
+  const q = prog(frame, CUE.endWord, CUE.endWord + t(0.8), E.stdInOut);
+  const k = lmix(K_BIG, 1, q);
+  const d = { x: mix(D_BIG.x, 0, q), y: mix(D_BIG.y, 0, q) };
+  // the reveal runs once the C is nearly home, its edge travelling from the c leftwards to the A
+  const edge = mix(LETTERS_RIGHT, -2, prog(frame, CUE.endWord + t(0.55), CUE.endWord + t(1.3), E.glideOut));
+  // and nothing shows to the right of the C's left side while it is still larger than its place
+  const cLeft = C_CENTRE.x + d.x + k * (C_LEFT - C_CENTRE.x);
   const tag = prog(frame, CUE.endTag, CUE.endTag + 34, E.snapOut);
-  const url = prog(frame, CUE.endUrl, CUE.endUrl + 34, E.snapOut);
-  const creep = lmix(1, 1.035, prog(frame, CUE.endWord, TOTAL, E.softOut));
+  const creep = lmix(1, 1.035, prog(frame, CUE.endLand, TOTAL, E.softOut));
   return (
     <AbsoluteFill style={{ transform: `scale(${creep})`, transformOrigin: `${W / 2}px ${H / 2}px` }}>
-      <div style={{ position: 'absolute', left: 0, top: 0, transform: `translate(${(LOCK_X + (1 - word) * 46).toFixed(3)}px, ${LOCK.cy - LOCK.h / 2}px)` }}>
-        <AsyncWordmark height={LOCK.h} dot={false} reveal={mix(0.16, 1, word)} style={{ opacity: clamp01(word * 3) }} />
+      <div style={{ position: 'absolute', left: 0, top: 0, transform: `translate(${LOCK_X.toFixed(3)}px, ${LOCK_Y}px)` }}>
+        <EndLockup height={LOCK.h} k={k} d={d} edge={edge} right={cLeft - 1} cOpacity={cA} cScale={0.82 + 0.18 * cA} dot={landed} />
       </div>
-      <div style={{ position: 'absolute', left: 0, top: 0, width: d, height: d, transform: `translate(${(x - d / 2).toFixed(3)}px, ${(y - d / 2).toFixed(3)}px)` }}>
-        <PaidCheck p={1} size={d} tick={tick} />
-      </div>
+      {!landed ? (
+        <div style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, transform: `translate(${(x - size / 2).toFixed(3)}px, ${(y - size / 2).toFixed(3)}px)` }}>
+          <PaidCheck p={1} size={size} tick={tick} />
+        </div>
+      ) : null}
       <div
         style={{
           position: 'absolute',
           left: 0,
           right: 0,
-          top: 600,
+          top: 612,
           textAlign: 'center',
           fontFamily: FONT.text,
           fontSize: 46,
@@ -179,23 +203,6 @@ const EndCard: React.FC<{ frame: number }> = ({ frame }) => {
         }}
       >
         {LINES.tagline}
-      </div>
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          top: 676,
-          textAlign: 'center',
-          fontFamily: FONT.mono,
-          fontSize: 28,
-          letterSpacing: '0.04em',
-          color: AS.signal,
-          opacity: url,
-          transform: `translateY(${(1 - url) * 12}px)`,
-        }}
-      >
-        {LINES.url}
       </div>
     </AbsoluteFill>
   );
