@@ -2,7 +2,15 @@ import type { Product } from "@async-rent/core";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-import { buildCatalogOverview } from "../lib/catalog-overview";
+import { buildCatalogOverview, setupsCategorySlug } from "../lib/catalog-overview";
+import {
+  defaultEquipmentSort,
+  equipmentFiltersSchema,
+  equipmentPageSize,
+  searchText,
+  toEquipmentCard,
+  type EquipmentPage,
+} from "../lib/equipment";
 import { getAsync, unwrap } from "./async";
 
 const catalogOverviewInput = z.object({ locationId: z.string() });
@@ -43,4 +51,61 @@ export const getCatalogOverview = createServerFn({ method: "GET" })
     }
 
     return buildCatalogOverview({ location, categories: unwrap(categories), products });
+  });
+
+const equipmentPageInput = equipmentFiltersSchema.extend({
+  locationId: z.string(),
+  // Core serves pages 1 to 100.
+  page: z.number().int().positive().max(100),
+});
+
+/**
+ * One page of "All equipment" cards for a city. Without a category it shows
+ * every category but the setups, which the bundles section already sells, so
+ * its total matches the "See all" count.
+ */
+export const getEquipmentPage = createServerFn({ method: "GET" })
+  .validator(equipmentPageInput)
+  .handler(async ({ data }): Promise<EquipmentPage> => {
+    const async = getAsync();
+
+    const [locations, categories] = await Promise.all([
+      async.catalog.listLocations(),
+      async.catalog.listCategories(),
+    ]);
+
+    const location = unwrap(locations).find((candidate) => candidate.id === data.locationId);
+    if (!location) throw new Error(`Location ${data.locationId} not found`);
+
+    const allCategories = unwrap(categories);
+    const category = data.category
+      ? allCategories.find((candidate) => candidate.slug === data.category)
+      : undefined;
+    const empty = { currency: location.currency, cards: [], total: 0, page: data.page };
+
+    // A stale or mistyped category link matches nothing rather than everything.
+    if (data.category && !category) return { ...empty, hasMore: false };
+
+    const setups = allCategories.find((candidate) => candidate.slug === setupsCategorySlug);
+
+    const found = unwrap(
+      await async.catalog.searchProducts({
+        q: searchText(data.q),
+        categoryId: category?.id,
+        excludeCategoryIds: !category && setups ? [setups.id] : undefined,
+        locationId: location.id,
+        // The URL holds whole units; core prices are minor units.
+        maxWeeklyPrice: data.maxPrice === undefined ? undefined : data.maxPrice * 100,
+        sort: data.sort ?? defaultEquipmentSort,
+        page: data.page,
+        pageSize: equipmentPageSize,
+      }),
+    );
+
+    return {
+      ...empty,
+      cards: found.items.flatMap((product) => toEquipmentCard(product, location.id) ?? []),
+      total: found.total,
+      hasMore: found.hasMore,
+    };
   });

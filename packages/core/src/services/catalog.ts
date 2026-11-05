@@ -15,13 +15,15 @@ import {
   productPrices,
   productSpecs,
   products,
+  rentalItems,
+  rentals,
 } from "@async-rent/db";
 import type { SQL } from "drizzle-orm";
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
-import type { Category, Location, Product, ProductPrice } from "../schemas";
+import type { Category, Location, Product, ProductPrice, RentalStatus } from "../schemas";
 import { amountSchema, categorySchema, locationSchema, productSchema } from "../schemas";
 import { attempt, createResult, groupBy, paginationSchema } from "../utils";
 
@@ -30,8 +32,10 @@ export interface CreateCatalogServiceOptions {
 }
 
 export const productSortSchema = z
-  .enum(["featured", "price_asc", "price_desc", "name_asc", "newest"])
-  .describe("Result order; price sorts use the selected location when one is given.");
+  .enum(["featured", "popular", "price_asc", "price_desc", "name_asc", "newest"])
+  .describe(
+    "Result order. popular puts the most rented first (units on paid rentals, then featured); price and popular sorts use the selected location when one is given.",
+  );
 
 export type ProductSort = z.infer<typeof productSortSchema>;
 
@@ -53,6 +57,11 @@ export const productQuerySchema = z.object({
       `Free-text search over name, tagline, description and category; every word must match (max ${maxSearchTokens} words).`,
     ),
   categoryId: z.string().optional().describe("Only return products in this category."),
+  excludeCategoryIds: z
+    .array(z.string())
+    .max(10)
+    .optional()
+    .describe("Leave out products in these categories, e.g. ready-made setups."),
   locationId: z.string().optional().describe("Only return products rentable in this location."),
   maxWeeklyPrice: amountSchema
     .optional()
@@ -215,12 +224,29 @@ function sortPrice(locationId: string | undefined): SQL {
   )`;
 }
 
+// Rentals that went ahead: unpaid and cancelled orders say nothing about demand.
+const placedRentalStatuses: RentalStatus[] = ["confirmed", "active", "completed"];
+
+/** Units of the product on placed rentals, in one location when given. */
+function rentedUnits(locationId: string | undefined): SQL {
+  return sql`(
+    select coalesce(sum(${rentalItems.quantity}), 0)
+    from ${rentalItems}
+    inner join ${rentals} on ${rentals.id} = ${rentalItems.rentalId}
+    where ${rentalItems.productId} = ${products.id}
+      and ${inArray(rentals.status, placedRentalStatuses)}
+      ${locationId ? sql`and ${rentals.locationId} = ${locationId}` : sql``}
+  )`;
+}
+
 // Every order ends with name and id, so equal rows keep the same order.
 function orderBy(sort: ProductSort, locationId: string | undefined): SQL[] {
   const byName = [asc(products.name), asc(products.id)];
   const price = sortPrice(locationId);
 
   switch (sort) {
+    case "popular":
+      return [desc(rentedUnits(locationId)), desc(products.featured), ...byName];
     case "price_asc":
       return [asc(price), ...byName];
     case "price_desc":
@@ -348,12 +374,14 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
 
   async function searchProducts(input: SearchProductsInput): Promise<SearchProductsResult> {
     const { ok, err } = searchProductsResult;
-    const { q, categoryId, locationId, maxWeeklyPrice, sort, page, pageSize } = input;
+    const { q, categoryId, excludeCategoryIds, locationId, maxWeeklyPrice, sort, page, pageSize } =
+      input;
 
     const where = and(
       eq(products.status, "active"),
       rentedAnywhere,
       categoryId ? eq(products.categoryId, categoryId) : undefined,
+      excludeCategoryIds?.length ? notInArray(products.categoryId, excludeCategoryIds) : undefined,
       locationId ? rentedIn(locationId) : undefined,
       maxWeeklyPrice === undefined ? undefined : pricedAtMost(maxWeeklyPrice, locationId),
       ...searchWords(q).map(matchesWord),

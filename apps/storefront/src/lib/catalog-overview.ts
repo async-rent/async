@@ -6,6 +6,8 @@ import {
   type Product,
 } from "@async-rent/core";
 
+import { productSummary } from "./equipment";
+
 /** The category the ready-made setups live in; the bundles section shows it apart. */
 export const setupsCategorySlug = "setups";
 
@@ -112,7 +114,7 @@ export function buildCatalogOverview(input: BuildCatalogOverviewInput): CatalogO
     categories: tiles,
     bundles,
     productSummaries: Object.fromEntries(
-      priced.map(({ product }) => [product.id, product.highlights[0] ?? product.tagline]),
+      priced.map(({ product }) => [product.id, productSummary(product)]),
     ),
   };
 }
