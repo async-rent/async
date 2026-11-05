@@ -3,14 +3,14 @@ import { isServer, keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { AllEquipment } from "../components/catalog/all-equipment";
-import { Bundles } from "../components/catalog/bundles";
-import { CatalogHero } from "../components/catalog/catalog-hero";
-import { CategoryIndex } from "../components/catalog/category-index";
-import { catalogOverviewQueryOptions } from "../hooks/use-catalog-overview";
-import { equipmentQueryOptions } from "../hooks/use-equipment";
-import { storefrontQueryOptions, useRentalPlan } from "../hooks/use-rental-plan";
-import { equipmentFiltersSchema, type EquipmentFilters } from "../lib/equipment";
+import { AllEquipment } from "../../components/catalog/all-equipment";
+import { Bundles } from "../../components/catalog/bundles";
+import { CatalogHero } from "../../components/catalog/catalog-hero";
+import { CategoryIndex } from "../../components/catalog/category-index";
+import { catalogOverviewQueryOptions } from "../../hooks/use-catalog-overview";
+import { equipmentQueryOptions } from "../../hooks/use-equipment";
+import { storefrontQueryOptions, useRentalPlan } from "../../hooks/use-rental-plan";
+import { equipmentFiltersSchema, type EquipmentFilters } from "../../lib/equipment";
 
 // Bad values fall back to "no filter" rather than an error page.
 const { shape } = equipmentFiltersSchema;
@@ -21,7 +21,7 @@ const catalogSearchSchema = z.object({
   maxPrice: shape.maxPrice.catch(undefined),
 });
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/_storefront/")({
   validateSearch: catalogSearchSchema,
   loaderDeps: ({ search: { q, category, sort, maxPrice } }) => ({ q, category, sort, maxPrice }),
   loader: async ({ context: { queryClient }, deps }) => {

@@ -3,17 +3,23 @@ import { Popover, PopoverContent, PopoverTrigger } from "@async-rent/ui/componen
 import { useState, type ReactElement, type ReactNode } from "react";
 
 import { useRentalPlan } from "../hooks/use-rental-plan";
-import { earliestDeliveryDate, fromCalendarDate, toCalendarDate } from "../lib/rental-plan";
+import {
+  earliestDeliveryDate,
+  fromCalendarDate,
+  latestDeliveryDate,
+  toCalendarDate,
+} from "../lib/rental-plan";
 
 interface DeliveryCalendarProps {
   /** Called after the visitor picks a day. */
   onPicked?: () => void;
 }
 
-/** A month calendar bound to the plan's delivery date; days before the city's first slot are disabled. */
+/** A month calendar bound to the plan's delivery date; days outside the city's booking window are disabled. */
 export function DeliveryCalendar({ onPicked }: DeliveryCalendarProps) {
   const { location, plan, setDeliveryDate } = useRentalPlan();
   const selected = toCalendarDate(plan.deliveryDate);
+  const now = new Date();
 
   return (
     <Calendar
@@ -21,7 +27,10 @@ export function DeliveryCalendar({ onPicked }: DeliveryCalendarProps) {
       required
       selected={selected}
       defaultMonth={selected}
-      disabled={{ before: toCalendarDate(earliestDeliveryDate(location, new Date())) }}
+      disabled={[
+        { before: toCalendarDate(earliestDeliveryDate(location, now)) },
+        { after: toCalendarDate(latestDeliveryDate(location, now)) },
+      ]}
       onSelect={(date) => {
         setDeliveryDate(fromCalendarDate(date));
         onPicked?.();

@@ -4,8 +4,6 @@ import { TanStackDevtools } from "@tanstack/react-devtools";
 
 import { CartDrawer } from "../components/cart/cart-drawer";
 import { CartDrawerProvider } from "../components/cart/cart-drawer-context";
-import { SiteFooter } from "../components/site-footer";
-import { SiteHeader } from "../components/site-header";
 import { storefrontQueryOptions } from "../hooks/use-rental-plan";
 import ClerkProvider from "../integrations/clerk/provider";
 
@@ -58,16 +56,12 @@ export const Route = createRootRouteWithContext<AppContext>()({
   component: RootLayout,
 });
 
+// Each section brings its own header: the shop pages the full one, checkout a
+// focused one. The cart drawer stays here so both can open it.
 function RootLayout() {
   return (
     <CartDrawerProvider>
-      <div className="flex min-h-svh flex-col">
-        <SiteHeader />
-        <main className="flex-1">
-          <Outlet />
-        </main>
-        <SiteFooter />
-      </div>
+      <Outlet />
       <CartDrawer />
     </CartDrawerProvider>
   );
