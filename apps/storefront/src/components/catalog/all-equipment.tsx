@@ -7,14 +7,24 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@async-rent/ui/components/empty";
-import { Popover, PopoverContent, PopoverTrigger } from "@async-rent/ui/components/popover";
+import { Field, FieldGroup, FieldTitle } from "@async-rent/ui/components/field";
+import {
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@async-rent/ui/components/popover";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@async-rent/ui/components/select";
+import { Separator } from "@async-rent/ui/components/separator";
 import { Skeleton } from "@async-rent/ui/components/skeleton";
 import { Spinner } from "@async-rent/ui/components/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@async-rent/ui/components/toggle-group";
@@ -31,8 +41,8 @@ import {
   defaultEquipmentSort,
   equipmentPageSize,
   equipmentPriceCeilings,
+  equipmentSortLabels,
   equipmentSortSchema,
-  equipmentSorts,
   type EquipmentCard,
   type EquipmentFilters,
   type EquipmentSort,
@@ -42,8 +52,6 @@ import { ProductImage } from "../product-image";
 
 // The badge the catalog gives its best sellers; it gets the design's filled pill.
 const mostRentedBadge = "most rented";
-
-const sortLabels = Object.fromEntries(equipmentSorts.map((sort) => [sort.value, sort.label]));
 
 interface AllEquipmentProps {
   filters: EquipmentFilters;
@@ -185,7 +193,7 @@ export function AllEquipment({ filters, categories, onFiltersChange }: AllEquipm
             </p>
             {query.hasNextPage && (
               <>
-                <span aria-hidden="true" className="h-px w-12 bg-border" />
+                <Separator className="w-12" />
                 <Button
                   variant="outline"
                   disabled={query.isFetchingNextPage}
@@ -241,7 +249,6 @@ function EquipmentCardView({ card, currency, stale }: EquipmentCardViewProps) {
         <Button
           variant="outline"
           size="sm"
-          className="font-normal text-primary hover:text-primary"
           disabled={adding || rentedOut || stale}
           aria-label={rentedOut ? `${card.name} is rented out` : `Add ${card.name} to cart`}
           onClick={() => addToCart(card.id)}
@@ -259,13 +266,7 @@ function CardBadge({ label }: { label: string }) {
   const highlighted = label.trim().toLowerCase() === mostRentedBadge;
 
   return (
-    <Badge
-      variant={highlighted ? "default" : "outline"}
-      className={cn(
-        "absolute top-3 left-3 h-5 px-2 font-mono text-[8px] font-normal tracking-[0.08em] uppercase",
-        !highlighted && "border-transparent bg-paper text-ink",
-      )}
-    >
+    <Badge variant={highlighted ? "default" : "outline"} className="absolute top-3 left-3">
       {label}
     </Badge>
   );
@@ -279,27 +280,26 @@ interface SortPickerProps {
 function SortPicker({ value, onChange }: SortPickerProps) {
   return (
     <Select
-      items={sortLabels}
+      items={equipmentSortLabels}
       value={value}
       onValueChange={(next) => {
         const parsed = equipmentSortSchema.safeParse(next);
         if (parsed.success) onChange(parsed.data);
       }}
     >
-      <SelectTrigger
-        aria-label="Sort equipment"
-        size="sm"
-        className="gap-1.5 border-transparent text-xs shadow-none hover:bg-muted"
-      >
+      <SelectTrigger aria-label="Sort equipment" size="sm">
         <span className="text-muted-foreground">Sort</span>
         <SelectValue />
       </SelectTrigger>
-      <SelectContent align="end" alignItemWithTrigger={false} className="min-w-44">
-        {equipmentSorts.map((sort) => (
-          <SelectItem key={sort.value} value={sort.value}>
-            {sort.label}
-          </SelectItem>
-        ))}
+      <SelectContent align="end" alignItemWithTrigger={false}>
+        <SelectGroup>
+          <SelectLabel>Sort by</SelectLabel>
+          {equipmentSortSchema.options.map((sort) => (
+            <SelectItem key={sort} value={sort}>
+              {equipmentSortLabels[sort]}
+            </SelectItem>
+          ))}
+        </SelectGroup>
       </SelectContent>
     </Select>
   );
@@ -319,49 +319,53 @@ function FiltersPopover({ filters, categories, onFiltersChange }: FiltersPopover
 
   return (
     <Popover>
-      <PopoverTrigger render={<Button variant="outline" size="sm" className="text-xs" />}>
+      <PopoverTrigger render={<Button variant="outline" size="sm" />}>
         <RiFilter3Line data-icon="inline-start" />
         Filters
         {count > 0 && (
           <>
-            <Badge aria-hidden="true" className="h-4 min-w-4 px-1 font-mono text-[9px]">
-              {count}
-            </Badge>
+            <Badge aria-hidden="true">{count}</Badge>
             <span className="sr-only">({count} active)</span>
           </>
         )}
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={8} className="w-80 gap-5">
-        <FilterGroup
-          label="Category"
-          value={filters.category ?? anyValue}
-          options={[
-            { value: anyValue, label: "All" },
-            ...categories.map((category) => ({ value: category.slug, label: category.name })),
-          ]}
-          onChange={(value) =>
-            onFiltersChange({ category: value === anyValue ? undefined : value })
-          }
-        />
-        <FilterGroup
-          label="Weekly price"
-          value={filters.maxPrice === undefined ? anyValue : String(filters.maxPrice)}
-          options={[
-            { value: anyValue, label: "Any" },
-            ...equipmentPriceCeilings.map((ceiling) => ({
-              value: String(ceiling),
-              label: `Up to ${formatMoney(ceiling * 100, location.currency)}`,
-            })),
-          ]}
-          onChange={(value) =>
-            onFiltersChange({ maxPrice: value === anyValue ? undefined : Number(value) })
-          }
-        />
+      <PopoverContent align="end" sideOffset={8} className="w-80">
+        <PopoverHeader>
+          <PopoverTitle>Filters</PopoverTitle>
+        </PopoverHeader>
+        <FieldGroup>
+          <FilterField
+            id="filter-category"
+            label="Category"
+            value={filters.category ?? anyValue}
+            options={[
+              { value: anyValue, label: "All" },
+              ...categories.map((category) => ({ value: category.slug, label: category.name })),
+            ]}
+            onChange={(value) =>
+              onFiltersChange({ category: value === anyValue ? undefined : value })
+            }
+          />
+          <FilterField
+            id="filter-weekly-price"
+            label="Weekly price"
+            value={filters.maxPrice === undefined ? anyValue : String(filters.maxPrice)}
+            options={[
+              { value: anyValue, label: "Any" },
+              ...equipmentPriceCeilings.map((ceiling) => ({
+                value: String(ceiling),
+                label: `Up to ${formatMoney(ceiling * 100, location.currency)}`,
+              })),
+            ]}
+            onChange={(value) =>
+              onFiltersChange({ maxPrice: value === anyValue ? undefined : Number(value) })
+            }
+          />
+        </FieldGroup>
         {count > 0 && (
           <Button
-            variant="link"
-            size="xs"
-            className="self-start px-0"
+            variant="outline"
+            size="sm"
             onClick={() => onFiltersChange({ category: undefined, maxPrice: undefined })}
           >
             Clear filters
@@ -372,27 +376,22 @@ function FiltersPopover({ filters, categories, onFiltersChange }: FiltersPopover
   );
 }
 
-interface FilterGroupProps {
+interface FilterFieldProps {
+  id: string;
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
 }
 
-function FilterGroup({ label, value, options, onChange }: FilterGroupProps) {
-  const labelId = `filter-${label.toLowerCase().replace(/\s+/g, "-")}`;
-
+function FilterField({ id, label, value, options, onChange }: FilterFieldProps) {
   return (
-    <div className="flex flex-col gap-2">
-      <p
-        id={labelId}
-        className="font-mono text-[9px] tracking-[0.12em] text-muted-foreground uppercase"
-      >
-        {label}
-      </p>
+    <Field>
+      <FieldTitle id={id}>{label}</FieldTitle>
       <ToggleGroup
-        aria-labelledby={labelId}
+        aria-labelledby={id}
         variant="outline"
+        size="sm"
         spacing={1}
         className="flex-wrap"
         value={[value]}
@@ -400,17 +399,12 @@ function FilterGroup({ label, value, options, onChange }: FilterGroupProps) {
         onValueChange={(next) => onChange(typeof next[0] === "string" ? next[0] : anyValue)}
       >
         {options.map((option) => (
-          <ToggleGroupItem
-            key={option.value}
-            value={option.value}
-            size="sm"
-            className="text-xs font-normal aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground aria-pressed:hover:bg-primary/90"
-          >
+          <ToggleGroupItem key={option.value} value={option.value}>
             {option.label}
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
-    </div>
+    </Field>
   );
 }
 

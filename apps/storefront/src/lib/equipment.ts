@@ -4,22 +4,26 @@ import { z } from "zod";
 /** Cards per page, and per "Load more". */
 export const equipmentPageSize = 12;
 
-/** The sorts the grid offers, in menu order. The first is the default. */
-export const equipmentSorts = [
-  { value: "popular", label: "Most rented" },
-  { value: "newest", label: "Newest" },
-  { value: "price_asc", label: "Price: low to high" },
-  { value: "price_desc", label: "Price: high to low" },
-  { value: "name_asc", label: "Name: A to Z" },
-] as const;
+/** The sorts the grid offers, in menu order. A subset of core's sorts. */
+export const equipmentSortSchema = z.enum([
+  "popular",
+  "newest",
+  "price_asc",
+  "price_desc",
+  "name_asc",
+]);
 
-export type EquipmentSort = (typeof equipmentSorts)[number]["value"];
+export type EquipmentSort = z.infer<typeof equipmentSortSchema>;
 
-export const defaultEquipmentSort: EquipmentSort = "popular";
+export const defaultEquipmentSort = equipmentSortSchema.enum.popular;
 
-export const equipmentSortSchema = z.enum(
-  equipmentSorts.map((sort) => sort.value) as [EquipmentSort, ...EquipmentSort[]],
-);
+export const equipmentSortLabels = {
+  popular: "Most rented",
+  newest: "Newest",
+  price_asc: "Price: low to high",
+  price_desc: "Price: high to low",
+  name_asc: "Name: A to Z",
+} satisfies Record<EquipmentSort, string>;
 
 /** Weekly price ceilings the filter offers, in whole currency units. */
 export const equipmentPriceCeilings = [5, 10, 20] as const;
@@ -48,15 +52,6 @@ export interface EquipmentCard {
   weeklyPrice: number;
   /** Units the city can still rent; unknown when unset. */
   stock?: number;
-}
-
-export interface EquipmentPage {
-  currency: string;
-  cards: EquipmentCard[];
-  /** Matching products across every page. */
-  total: number;
-  page: number;
-  hasMore: boolean;
 }
 
 /** The one-line summary a product shows on cards and cart lines. */

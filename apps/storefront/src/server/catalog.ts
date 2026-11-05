@@ -9,7 +9,6 @@ import {
   equipmentPageSize,
   searchText,
   toEquipmentCard,
-  type EquipmentPage,
 } from "../lib/equipment";
 import { getAsync, unwrap } from "./async";
 
@@ -66,7 +65,7 @@ const equipmentPageInput = equipmentFiltersSchema.extend({
  */
 export const getEquipmentPage = createServerFn({ method: "GET" })
   .validator(equipmentPageInput)
-  .handler(async ({ data }): Promise<EquipmentPage> => {
+  .handler(async ({ data }) => {
     const async = getAsync();
 
     const [locations, categories] = await Promise.all([
