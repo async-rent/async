@@ -65,9 +65,24 @@ export const orderNumberInputSchema = z.object({ number: rentalNumberSchema });
 
 export const startRentalPaymentInputSchema = orderNumberInputSchema;
 
-/** The pages PayPal returns to carry the order number; anything else reads as none. */
+// The provider order PayPal appends to the return URL as `token`.
+const paymentTokenSchema = z.string().trim().min(1).max(64);
+
+/**
+ * The order to confirm, and the PayPal order the visitor approved. Only that
+ * order is captured, so a confirm never takes money for one nobody approved.
+ */
+export const confirmRentalPaymentInputSchema = orderNumberInputSchema.extend({
+  token: paymentTokenSchema.optional(),
+});
+
+/**
+ * The pages PayPal returns to carry the order number, and on approval the
+ * PayPal order in `token`; anything else reads as none.
+ */
 export const paymentReturnSearchSchema = z.object({
   rental: rentalNumberSchema.optional().catch(undefined),
+  token: paymentTokenSchema.optional().catch(undefined),
 });
 
 /** The contact details a signed-in visitor's form starts with. */
@@ -112,8 +127,14 @@ export interface OpenOrder extends OrderView {
 export interface PaidOrder extends OpenOrder {
   /** What the payment at checkout took, in minor units. */
   paid: number;
+  /** When it was taken, as an ISO timestamp. */
+  paidAt: string;
+  /** Whether the setup has reached the visitor, so delivery reads as done. */
+  delivered: boolean;
   /** The day the next weekly charge falls, or `null` when no week is left to bill. */
   nextChargeDate: string | null;
+  /** Weekly charges still to come, the next one included; `null` until the rental is ended. */
+  chargesLeft: number | null;
 }
 
 /**
@@ -122,12 +143,14 @@ export interface PaidOrder extends OpenOrder {
  * - `declined`: PayPal refused the payment; nothing was charged.
  * - `processing`: PayPal holds the money but hasn't released it yet.
  * - `unfinished`: the approval was for a payment since replaced, or none was started.
+ * - `refunded`: the order was paid, and that payment has since been refunded.
  * - `cancelled`: the order was cancelled, so there is nothing to pay.
  */
 export type PaymentReturn =
   | { outcome: "paid"; order: PaidOrder }
   | { outcome: "declined"; order: OpenOrder; reason: string }
-  | { outcome: "processing" | "unfinished" | "cancelled"; number: string };
+  | { outcome: "unfinished"; order: OpenOrder }
+  | { outcome: "processing" | "refunded" | "cancelled"; number: string };
 
 /** One of the visitor's orders, and whether it still waits for its first payment. */
 export interface OwnOrder {

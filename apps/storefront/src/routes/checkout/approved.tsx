@@ -27,9 +27,9 @@ export const Route = createFileRoute("/checkout/approved")({
 });
 
 function ApprovedPage() {
-  const { rental: number } = Route.useSearch();
+  const { rental: number, token } = Route.useSearch();
   const { isLoaded, isSignedIn } = useAuth();
-  const confirmation = usePaymentConfirmation(number);
+  const confirmation = usePaymentConfirmation(number, token);
 
   if (!number) return <NoOrderReturn />;
   if (!isLoaded) return <ConfirmingPayment />;
@@ -84,17 +84,18 @@ function ApprovedPage() {
         </ReturnMessage>
       );
     case "unfinished":
+      return <UnpaidOrder order={result.order} title="This order isn't paid yet." />;
+    case "refunded":
       return (
         <ReturnMessage
-          title="This payment isn't finished"
+          title={`Order ${result.number} was refunded`}
           actions={
-            <Link to="/checkout" className={buttonVariants()}>
-              Go to checkout
-            </Link>
+            <a href={`mailto:${supportEmail}`} className={buttonVariants({ variant: "outline" })}>
+              Email us
+            </a>
           }
         >
-          Order {result.number} has a newer PayPal payment waiting, and nothing was charged here.
-          Finish paying for it from checkout.
+          Its payment went back to your PayPal account. Email us if you weren't expecting this.
         </ReturnMessage>
       );
     case "cancelled":

@@ -189,21 +189,29 @@ function billingStep(order: PaidOrder): { title: string; text: string } {
   if (!order.nextChargeDate) {
     return {
       title: "Nothing more to pay",
-      text: "Your rental runs one week, and that week is paid.",
+      text:
+        order.weeks === 1
+          ? "Your rental runs one week, and that week is paid."
+          : "Every week of your rental is paid.",
     };
   }
 
-  const more = order.weeks === null ? null : order.weeks - 1;
+  const more = order.chargesLeft;
   const until =
     more === null
       ? "every week until you end the rental"
-      : `for ${more} more ${more === 1 ? "week" : "weeks"}`;
+      : more === 1
+        ? "for its last week"
+        : `for ${more} more weeks`;
 
   return {
     title: `Next charge on ${formatDeliveryDate(order.nextChargeDate)}`,
-    text: `${weekly} a week, from the PayPal account you just used, ${until}.`,
+    text: `${weekly} a week, from the PayPal account you paid with, ${until}.`,
   };
 }
+
+// The local calendar day of a timestamp, to compare two of them. Pure.
+const localDay = (date: Date) => date.toDateString();
 
 /** The confirmation: the order is paid, and when it arrives and is billed next. */
 export function PaidConfirmation({ order }: { order: PaidOrder }) {
@@ -212,6 +220,12 @@ export function PaidConfirmation({ order }: { order: PaidOrder }) {
   const address = [details.line1, details.city].filter(Boolean).join(", ");
   const billing = billingStep(order);
   const deposit = order.summary.deposit;
+  // Rendered in the browser only, once the confirm query answers, so "today" is the visitor's.
+  const paidAt = new Date(order.paidAt);
+  const paidToday = localDay(paidAt) === localDay(new Date());
+  const paidLabel = paidToday
+    ? "Paid today"
+    : `Paid on ${new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short" }).format(paidAt)}`;
 
   return (
     <ReturnLayout
@@ -220,7 +234,11 @@ export function PaidConfirmation({ order }: { order: PaidOrder }) {
       description={
         <>
           <OrderNumber number={order.number} />
-          <p>It's paid and confirmed. We'll bring your setup on {delivery}.</p>
+          <p>
+            {order.delivered
+              ? `It's paid and confirmed, and your setup was delivered on ${delivery}.`
+              : `It's paid and confirmed. We'll bring your setup on ${delivery}.`}
+          </p>
         </>
       }
       actions={
@@ -234,7 +252,7 @@ export function PaidConfirmation({ order }: { order: PaidOrder }) {
       aside={
         <OrderReceipt
           order={order}
-          totalLabel="Paid today"
+          totalLabel={paidLabel}
           total={order.paid}
           note={
             deposit > 0
@@ -249,12 +267,14 @@ export function PaidConfirmation({ order }: { order: PaidOrder }) {
           What happens next
         </h2>
         <ol className="flex flex-col">
-          <NextStep icon={RiTruckLine} title={`Delivery on ${delivery}`}>
-            We deliver, assemble and set up everything{address ? ` at ${address}` : ""}.{" "}
-            {details.whatsapp
-              ? `We'll WhatsApp ${details.whatsapp} before we arrive.`
-              : `We'll email ${details.email} before we arrive.`}
-          </NextStep>
+          {!order.delivered && (
+            <NextStep icon={RiTruckLine} title={`Delivery on ${delivery}`}>
+              We deliver, assemble and set up everything{address ? ` at ${address}` : ""}.{" "}
+              {details.whatsapp
+                ? `We'll WhatsApp ${details.whatsapp} before we arrive.`
+                : `We'll email ${details.email} before we arrive.`}
+            </NextStep>
+          )}
           <NextStep icon={RiCalendarLine} title={billing.title}>
             {billing.text}
           </NextStep>
