@@ -12,6 +12,7 @@ export default defineConfig({
       "**/worker-configuration.d.ts",
       "**/routeTree.gen.ts",
       "packages/db/migrations/meta/*",
+      "demo/*",
     ],
   },
   lint: {
@@ -24,6 +25,7 @@ export default defineConfig({
       ".kiro/*",
       "**/worker-configuration.d.ts",
       "**/routeTree.gen.ts",
+      "demo/*",
     ],
   },
   run: {

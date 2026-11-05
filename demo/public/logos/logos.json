@@ -1,0 +1,172 @@
+{
+ "about": "The real marks this film shows: where each file came from, its licence and its trademark owner. A private record for the film and its delivery notes: never shown on screen. Written by scripts/logos.mjs.",
+ "logos": {
+  "claude": {
+   "name": "Claude",
+   "owner": "Anthropic PBC",
+   "site": "https://claude.ai/",
+   "hex": "#D97757",
+   "guidelines": "https://claude.ai",
+   "tone": "colour",
+   "tile": "none",
+   "files": {
+    "mark": {
+     "path": "logos/claude.svg",
+     "aspect": 0.996,
+     "from": "gilbarbara",
+     "url": "https://raw.githubusercontent.com/gilbarbara/logos/main/logos/claude-icon.svg",
+     "file": "claude-icon.svg"
+    },
+    "wordmark": {
+     "path": "logos/claude.wordmark.svg",
+     "aspect": 4.655,
+     "from": "gilbarbara",
+     "url": "https://raw.githubusercontent.com/gilbarbara/logos/main/logos/claude.svg",
+     "file": "claude.svg"
+    },
+    "wordmarkDark": {
+     "path": "logos/claude.wordmark.dark.svg",
+     "aspect": 4.655,
+     "from": "gilbarbara",
+     "url": "https://raw.githubusercontent.com/gilbarbara/logos/main/logos/claude.svg",
+     "file": "claude.svg",
+     "derived": "wordmark with its neutrals reversed for dark grounds"
+    },
+    "mono": {
+     "path": "logos/claude.mono.svg",
+     "aspect": 1,
+     "from": "simple-icons",
+     "url": "https://cdn.jsdelivr.net/npm/simple-icons@16/icons/claude.svg"
+    },
+    "white": {
+     "path": "logos/claude.white.svg",
+     "aspect": 1,
+     "from": "simple-icons",
+     "url": "https://cdn.jsdelivr.net/npm/simple-icons@16/icons/claude.svg"
+    },
+    "black": {
+     "path": "logos/claude.black.svg",
+     "aspect": 1,
+     "from": "simple-icons",
+     "url": "https://cdn.jsdelivr.net/npm/simple-icons@16/icons/claude.svg"
+    }
+   },
+   "sources": {
+    "gilbarbara": {
+     "collection": "SVG Logos (gilbarbara/logos)",
+     "page": "https://github.com/gilbarbara/logos",
+     "licence": "CC0-1.0",
+     "licenceUrl": "https://github.com/gilbarbara/logos/blob/main/LICENSE.txt",
+     "seen": {
+      "quote": "CC0 1.0 Universal",
+      "url": "https://raw.githubusercontent.com/gilbarbara/logos/main/LICENSE.txt"
+     }
+    },
+    "simple-icons": {
+     "collection": "Simple Icons",
+     "page": "https://simpleicons.org",
+     "licence": "CC0-1.0",
+     "licenceUrl": "https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md",
+     "seen": {
+      "quote": "Please see individual licenses where available.",
+      "url": "https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md"
+     }
+    }
+   },
+   "version": {
+    "status": "current",
+    "since": null,
+    "what": "the spark in its own terracotta",
+    "checked": "2026-10-29",
+    "page": "https://claude.ai"
+   },
+   "trademark": "Claude is a trademark of Anthropic PBC. Shown only for what the product works with, imports from, runs on or names; no endorsement or partnership implied. Colours and proportions as published.",
+   "fetched": "2026-11-05"
+  },
+  "paypal": {
+   "name": "PayPal",
+   "owner": "PayPal, Inc.",
+   "site": "https://paypal.com",
+   "hex": "#002991",
+   "guidelines": "https://newsroom.paypal-corp.com/media-resources",
+   "tone": "colour",
+   "tile": "none",
+   "files": {
+    "mark": {
+     "path": "logos/paypal.svg",
+     "aspect": 0.83,
+     "from": "commons",
+     "url": "https://upload.wikimedia.org/wikipedia/commons/0/0e/PayPal_2024_%28Icon%29.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
+    },
+    "wordmark": {
+     "path": "logos/paypal.wordmark.svg",
+     "aspect": 4.122,
+     "from": "svgl",
+     "url": "https://svgl.app/library/paypal-wordmark.svg"
+    },
+    "mono": {
+     "path": "logos/paypal.mono.svg",
+     "aspect": 0.848,
+     "from": "simple-icons",
+     "url": "https://cdn.jsdelivr.net/npm/simple-icons@16/icons/paypal.svg",
+     "trimmed": true
+    },
+    "white": {
+     "path": "logos/paypal.white.svg",
+     "aspect": 0.848,
+     "from": "simple-icons",
+     "url": "https://cdn.jsdelivr.net/npm/simple-icons@16/icons/paypal.svg",
+     "trimmed": true
+    },
+    "black": {
+     "path": "logos/paypal.black.svg",
+     "aspect": 0.848,
+     "from": "simple-icons",
+     "url": "https://cdn.jsdelivr.net/npm/simple-icons@16/icons/paypal.svg",
+     "trimmed": true
+    }
+   },
+   "sources": {
+    "commons": {
+     "collection": "Wikimedia Commons",
+     "page": "https://commons.wikimedia.org/wiki/File:PayPal_2024_(Icon).svg",
+     "licence": "PD",
+     "licenceUrl": "https://commons.wikimedia.org/wiki/Commons:Licensing",
+     "notes": [
+      "restrictions named on the page (trademarked): read it before use"
+     ]
+    },
+    "svgl": {
+     "collection": "svgl",
+     "page": "https://svgl.app",
+     "licence": "MIT",
+     "licenceUrl": "https://github.com/pheralb/svgl/blob/main/LICENSE",
+     "seen": {
+      "quote": "ensure you have the right to use it and that its license permits adding it to svgl",
+      "url": "https://github.com/pheralb/svgl#readme"
+     },
+     "terms": "the API asks for cached responses and for no copy of svgl built from it"
+    },
+    "simple-icons": {
+     "collection": "Simple Icons",
+     "page": "https://simpleicons.org",
+     "licence": "CC0-1.0",
+     "licenceUrl": "https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md",
+     "seen": {
+      "quote": "Please see individual licenses where available.",
+      "url": "https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md"
+     }
+    }
+   },
+   "version": {
+    "status": "current",
+    "since": "2024",
+    "what": "the PP monogram of the 2024 identity",
+    "checked": "2026-10-29",
+    "page": "https://newsroom.paypal-corp.com/media-resources"
+   },
+   "trademark": "PayPal is a trademark of PayPal, Inc.. Shown only for what the product works with, imports from, runs on or names; no endorsement or partnership implied. Colours and proportions as published.",
+   "fetched": "2026-11-05"
+  }
+ }
+}
