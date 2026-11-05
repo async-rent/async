@@ -47,18 +47,21 @@ function showCartError(error: Error) {
 export function useCartActions() {
   const queryClient = useQueryClient();
   const clerk = useClerk();
-  const { isSignedIn, userId } = useAuth();
+  const { isSignedIn } = useAuth();
   const { plan } = useRentalPlan();
   const { setOpen } = useCartDrawer();
   const add = useServerFn(addCartItem);
   const setQuantity = useServerFn(setCartItemQuantity);
 
-  const key = cartQueryKey(userId, plan.locationId);
+  // Key the write by the city the server answered for, not the one on screen
+  // now: the visitor may switch cities while a write is in flight.
+  const saveCart = (cart: Cart) =>
+    queryClient.setQueryData(cartQueryKey(cart.userId, cart.locationId), cart);
 
   const adding = useMutation({
     mutationFn: (productId: string) => add({ data: { locationId: plan.locationId, productId } }),
     onSuccess: (cart) => {
-      queryClient.setQueryData(key, cart);
+      saveCart(cart);
       setOpen(true);
     },
     onError: showCartError,
@@ -67,7 +70,7 @@ export function useCartActions() {
   const updating = useMutation({
     mutationFn: (line: { productId: string; quantity: number }) =>
       setQuantity({ data: { locationId: plan.locationId, ...line } }),
-    onSuccess: (cart) => queryClient.setQueryData(key, cart),
+    onSuccess: saveCart,
     onError: showCartError,
   });
 

@@ -52,7 +52,8 @@ export const Route = createRootRouteWithContext<AppContext>()({
     ],
   }),
   // Cities and the visitor's rental plan: every page reads them through useRentalPlan.
-  loader: ({ context: { queryClient } }) => queryClient.ensureQueryData(storefrontQueryOptions),
+  loader: ({ context: { queryClient } }) =>
+    queryClient.query({ ...storefrontQueryOptions, staleTime: "static" }),
   shellComponent: RootDocument,
   component: RootLayout,
 });

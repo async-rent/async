@@ -18,8 +18,12 @@ const catalogSearchSchema = z.object({
 export const Route = createFileRoute("/")({
   validateSearch: catalogSearchSchema,
   loader: async ({ context: { queryClient } }) => {
-    const { plan } = await queryClient.ensureQueryData(storefrontQueryOptions);
-    await queryClient.ensureQueryData(catalogOverviewQueryOptions(plan.locationId));
+    // "static" reuses whatever is cached, as the loader only needs the data present.
+    const { plan } = await queryClient.query({ ...storefrontQueryOptions, staleTime: "static" });
+    await queryClient.query({
+      ...catalogOverviewQueryOptions(plan.locationId),
+      staleTime: "static",
+    });
   },
   component: CatalogPage,
 });
