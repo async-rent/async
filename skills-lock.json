@@ -49,6 +49,12 @@
       "skillPath": "skills/break-ui/SKILL.md",
       "computedHash": "60ada67662925f4df5e3c6ff41cac3ab241b66f8898100a5ffcd7ba7196cb868"
     },
+    "cinetic": {
+      "source": "Leonxlnx/cinetic",
+      "sourceType": "github",
+      "skillPath": "skills/cinetic/SKILL.md",
+      "computedHash": "f677f3fe4a3cf1a0b557753eee230466dca0ead6b3e32183beb85a72db8507d1"
+    },
     "cloudflare": {
       "source": "cloudflare/skills",
       "sourceType": "github",
