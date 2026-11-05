@@ -1,4 +1,3 @@
-import type { Cart } from "@async-rent/core";
 import { Button, buttonVariants } from "@async-rent/ui/components/button";
 import {
   Empty,
@@ -14,9 +13,12 @@ import { RiCheckLine } from "@remixicon/react";
 import { Link, createFileRoute } from "@tanstack/react-router";
 
 import { CheckoutForm } from "../../components/checkout/checkout-form";
+import { useCartDrawer } from "../../components/cart/cart-drawer-context";
 import { OrderSummary } from "../../components/checkout/order-summary";
 import { useCart } from "../../hooks/use-cart";
-import { useCheckout, useCheckoutContact } from "../../hooks/use-checkout";
+import { useCheckout, useCheckoutContact, useOpenOrder } from "../../hooks/use-checkout";
+import { useRentalPlan } from "../../hooks/use-rental-plan";
+import { cartOrderView, type CheckoutDetailsInput, type OrderView } from "../../lib/checkout";
 
 export const Route = createFileRoute("/checkout/")({
   component: CheckoutPage,
@@ -28,23 +30,35 @@ const pageClass = "mx-auto flex w-full max-w-360 flex-col px-5 pt-8 pb-20 md:px-
 
 function CheckoutPage() {
   const { isLoaded } = useAuth();
+  const { location, plan } = useRentalPlan();
   const { cart, isSignedIn, isLoading } = useCart();
   const contact = useCheckoutContact();
-  const checkout = useCheckout();
+  const openOrder = useOpenOrder();
+  const placed = openOrder.data ?? null;
+  const checkout = useCheckout(placed);
 
-  // Once the order is placed its cart is empty, so the page keeps showing what was ordered.
-  const orderCart = checkout.placed?.cart ?? cart;
-  const hasItems = orderCart?.items.some((item) => item.available) ?? false;
-
-  if (!isLoaded || (isSignedIn && !checkout.placed && (isLoading || contact.isPending))) {
-    return <CheckoutSkeleton />;
-  }
+  if (!isLoaded || (isSignedIn && openOrder.isPending)) return <CheckoutSkeleton />;
   if (!isSignedIn) return <SignedOutCheckout />;
-  if (!orderCart || !hasItems) return <EmptyCheckout />;
+
+  // A placed order waiting for payment takes the cart's place until it is paid.
+  let order: OrderView;
+  let defaults: Partial<CheckoutDetailsInput>;
+  if (placed) {
+    order = placed;
+    defaults = placed.details;
+  } else {
+    if (isLoading || contact.isPending) return <CheckoutSkeleton />;
+    if (!cart || cart.items.length === 0) return <EmptyCheckout />;
+    if (!cart.items.some((item) => item.available)) {
+      return <NothingAvailableCheckout city={location.name} />;
+    }
+    order = cartOrderView(cart, plan);
+    defaults = contact.data ?? {};
+  }
 
   return (
     <div className={pageClass}>
-      <CheckoutSteps cart={orderCart} />
+      <CheckoutSteps freeDelivery={order.summary.deliveryFee === 0} />
       <div className="grid gap-12 pt-10 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start xl:grid-cols-[minmax(0,1fr)_440px] xl:gap-20">
         <div className="flex min-w-0 flex-col gap-10">
           <div className="flex flex-col gap-4">
@@ -57,16 +71,18 @@ function CheckoutPage() {
             </p>
           </div>
           <CheckoutForm
+            // The fields are uncontrolled: start them over once the order is placed.
+            key={placed?.number ?? "new"}
             id={formId}
-            contact={contact.data ?? undefined}
-            locked={checkout.placed !== null}
-            onSubmit={(details) => checkout.submit({ details, cart: orderCart })}
+            defaults={defaults}
+            placedDeliveryDate={placed?.deliveryDate}
+            onSubmit={checkout.submit}
           />
         </div>
         <OrderSummary
-          cart={orderCart}
+          order={order}
           formId={formId}
-          placedNumber={checkout.placed?.number}
+          placedNumber={placed?.number}
           isSubmitting={checkout.isSubmitting}
           error={checkout.error}
         />
@@ -77,7 +93,7 @@ function CheckoutPage() {
 
 const stepLabel = "font-mono text-[10px] tracking-[0.12em] uppercase";
 
-function CheckoutSteps({ cart }: { cart: Cart }) {
+function CheckoutSteps({ freeDelivery }: { freeDelivery: boolean }) {
   return (
     <nav aria-label="Checkout steps" className="flex items-center justify-between gap-4">
       <ol className="flex items-center gap-3">
@@ -97,7 +113,7 @@ function CheckoutSteps({ cart }: { cart: Cart }) {
           <span className={stepLabel}>Checkout</span>
         </li>
       </ol>
-      {cart.summary.deliveryFee === 0 && (
+      {freeDelivery && (
         <p className="flex items-center gap-2 text-muted-foreground">
           <span aria-hidden className="size-1.5 rounded-full bg-primary" />
           <span className={stepLabel}>Free delivery</span>
@@ -153,6 +169,32 @@ function EmptyCheckout() {
         </EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
+        <Link to="/" className={buttonVariants({ variant: "outline" })}>
+          Browse equipment
+        </Link>
+      </EmptyContent>
+    </Empty>
+  );
+}
+
+function NothingAvailableCheckout({ city }: { city: string }) {
+  const { setOpen } = useCartDrawer();
+
+  return (
+    <Empty className="min-h-120">
+      <EmptyHeader>
+        <EmptyTitle className="font-heading text-2xl font-normal">
+          Nothing in your cart is available
+        </EmptyTitle>
+        <EmptyDescription>
+          The gear in your cart can't be rented in {city} right now. Swap it for something else,
+          then come back here to place your order.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="flex-row justify-center">
+        <Button variant="outline" onClick={() => setOpen(true)}>
+          Open cart
+        </Button>
         <Link to="/" className={buttonVariants({ variant: "outline" })}>
           Browse equipment
         </Link>

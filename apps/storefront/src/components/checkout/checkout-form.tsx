@@ -14,25 +14,17 @@ import { RadioGroup, RadioGroupItem } from "@async-rent/ui/components/radio-grou
 import { ToggleGroup, ToggleGroupItem } from "@async-rent/ui/components/toggle-group";
 import { RiInformationLine, RiLockLine } from "@remixicon/react";
 import { cn } from "cn";
-import {
-  useId,
-  useRef,
-  useState,
-  type ComponentProps,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { useId, useState, type ComponentProps, type FormEvent, type ReactNode } from "react";
 import { z } from "zod";
 
 import { useRentalPlan } from "../../hooks/use-rental-plan";
 import {
   checkoutDetailsSchema,
   deliveryDayOptions,
-  type CheckoutContact,
   type CheckoutDetailsInput,
   type CheckoutField,
 } from "../../lib/checkout";
-import { formatDeliveryDate } from "../../lib/rental-plan";
+import { formatDeliveryDate, latestDeliveryDate } from "../../lib/rental-plan";
 
 const fieldLabel =
   "font-mono text-[9.5px] font-normal tracking-[0.12em] text-muted-foreground uppercase";
@@ -49,27 +41,30 @@ type FieldErrors = Partial<Record<CheckoutField, string>>;
 
 interface CheckoutFormProps {
   id: string;
-  /** What the contact fields start with; the visitor can change it. */
-  contact: CheckoutContact | undefined;
-  /** Set once the order is placed: its details can no longer change, only its payment be retried. */
-  locked: boolean;
-  onSubmit: (details: CheckoutDetailsInput) => void;
+  /** What the fields start with; the visitor can change them until the order is placed. */
+  defaults: Partial<CheckoutDetailsInput>;
+  /**
+   * The placed order's delivery day. Once set, the form shows the order as
+   * placed and only its payment can be retried.
+   */
+  placedDeliveryDate?: string;
+  /** The details to place the order with, or `undefined` to pay the placed one. */
+  onSubmit: (details: CheckoutDetailsInput | undefined) => void;
 }
 
 /**
  * Contact, delivery and payment. The submit button lives in the order summary
  * and targets this form by `id`.
  */
-export function CheckoutForm({ id, contact, locked, onSubmit }: CheckoutFormProps) {
+export function CheckoutForm({ id, defaults, placedDeliveryDate, onSubmit }: CheckoutFormProps) {
   const [errors, setErrors] = useState<FieldErrors>({});
-  // The details the order was placed with, resent when only the payment is retried.
-  const submitted = useRef<CheckoutDetailsInput | null>(null);
+  const locked = placedDeliveryDate !== undefined;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (locked && submitted.current) {
-      onSubmit(submitted.current);
+    if (locked) {
+      onSubmit(undefined);
       return;
     }
 
@@ -97,7 +92,6 @@ export function CheckoutForm({ id, contact, locked, onSubmit }: CheckoutFormProp
     }
 
     setErrors({});
-    submitted.current = parsed.data;
     onSubmit(parsed.data);
   }
 
@@ -121,7 +115,7 @@ export function CheckoutForm({ id, contact, locked, onSubmit }: CheckoutFormProp
               label="Email"
               type="email"
               autoComplete="email"
-              defaultValue={contact?.email}
+              defaultValue={defaults.email}
             />
             <TextField
               {...fieldProps("whatsapp")}
@@ -130,7 +124,7 @@ export function CheckoutForm({ id, contact, locked, onSubmit }: CheckoutFormProp
               inputMode="tel"
               autoComplete="tel"
               placeholder="+62 812 3456 7890"
-              defaultValue={contact?.whatsapp}
+              defaultValue={defaults.whatsapp}
             />
           </div>
         </Section>
@@ -142,12 +136,27 @@ export function CheckoutForm({ id, contact, locked, onSubmit }: CheckoutFormProp
               label="Address"
               autoComplete="address-line1"
               placeholder="Street, number, villa or building"
+              defaultValue={defaults.line1}
             />
             <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_180px]">
-              <TextField {...fieldProps("city")} label="City" autoComplete="address-level2" />
-              <TextField {...fieldProps("postcode")} label="Postcode" autoComplete="postal-code" />
+              <TextField
+                {...fieldProps("city")}
+                label="City"
+                autoComplete="address-level2"
+                defaultValue={defaults.city}
+              />
+              <TextField
+                {...fieldProps("postcode")}
+                label="Postcode"
+                autoComplete="postal-code"
+                defaultValue={defaults.postcode}
+              />
             </div>
-            <DeliveryDays disabled={locked} />
+            {placedDeliveryDate ? (
+              <PlacedDeliveryDay date={placedDeliveryDate} />
+            ) : (
+              <DeliveryDays />
+            )}
           </FieldGroup>
         </Section>
       </fieldset>
@@ -256,18 +265,42 @@ function TextField({ name, label, error, className, ...props }: TextFieldProps) 
  * The planned delivery day and the next two the courier runs. Picking one
  * updates the plan, so the cart and the order summary show the same day.
  */
-function DeliveryDays({ disabled }: { disabled: boolean }) {
-  const { plan, setDeliveryDate } = useRentalPlan();
-  const labelId = useId();
+function DeliveryDays() {
+  const { location, plan, setDeliveryDate } = useRentalPlan();
+  const latest = latestDeliveryDate(location, new Date());
 
   // The days stay put while the visitor picks among them; a day chosen
   // elsewhere (the cart's calendar) starts a new set.
   const [firstDay, setFirstDay] = useState(plan.deliveryDate);
-  let days = deliveryDayOptions(firstDay);
+  let days = deliveryDayOptions(firstDay, latest);
   if (!days.includes(plan.deliveryDate)) {
     setFirstDay(plan.deliveryDate);
-    days = deliveryDayOptions(plan.deliveryDate);
+    days = deliveryDayOptions(plan.deliveryDate, latest);
   }
+
+  return (
+    <DeliveryDayToggles
+      days={days}
+      value={plan.deliveryDate}
+      onChange={(day) => setDeliveryDate(day)}
+    />
+  );
+}
+
+/** The day a placed order is delivered on; it can no longer change. */
+function PlacedDeliveryDay({ date }: { date: string }) {
+  return <DeliveryDayToggles days={[date]} value={date} disabled />;
+}
+
+interface DeliveryDayTogglesProps {
+  days: string[];
+  value: string;
+  disabled?: boolean;
+  onChange?: (day: string) => void;
+}
+
+function DeliveryDayToggles({ days, value, disabled, onChange }: DeliveryDayTogglesProps) {
+  const labelId = useId();
 
   return (
     <Field className="gap-2 pt-1">
@@ -280,11 +313,11 @@ function DeliveryDays({ disabled }: { disabled: boolean }) {
           variant="outline"
           className="flex-wrap"
           disabled={disabled}
-          value={[plan.deliveryDate]}
-          onValueChange={(value) => {
+          value={[value]}
+          onValueChange={(next) => {
             // Clicking the picked day again keeps it rather than leaving none.
-            const [day] = value;
-            if (day) setDeliveryDate(day);
+            const [day] = next;
+            if (day) onChange?.(day);
           }}
         >
           {days.map((day) => (

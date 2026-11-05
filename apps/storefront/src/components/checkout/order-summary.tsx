@@ -1,4 +1,3 @@
-import type { Cart, CartItem } from "@async-rent/core";
 import { Alert, AlertDescription, AlertTitle } from "@async-rent/ui/components/alert";
 import { Avatar, AvatarFallback } from "@async-rent/ui/components/avatar";
 import { Button } from "@async-rent/ui/components/button";
@@ -8,14 +7,16 @@ import {
   RiArrowRightLine,
   RiCustomerService2Line,
   RiErrorWarningLine,
+  RiInformationLine,
   RiLockLine,
 } from "@remixicon/react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 
+import type { CheckoutError } from "../../hooks/use-checkout";
 import { catalogOverviewQueryOptions } from "../../hooks/use-catalog-overview";
 import { useRentalPlan } from "../../hooks/use-rental-plan";
-import { supportEmail } from "../../lib/checkout";
+import { supportEmail, type OrderLine, type OrderView } from "../../lib/checkout";
 import { cityLabel } from "../../lib/cities";
 import { formatMoney } from "../../lib/money";
 import { formatDeliveryDate } from "../../lib/rental-plan";
@@ -24,30 +25,39 @@ import { ProductImage } from "../product-image";
 const eyebrow = "font-mono text-[10px] tracking-[0.12em] uppercase";
 
 interface OrderSummaryProps {
-  cart: Cart;
+  /** The cart about to be ordered, or the order already placed. */
+  order: OrderView;
   /** The form the pay button submits. */
   formId: string;
   /** The order's number once placed, so a retry can say it is saved. */
   placedNumber: string | undefined;
   isSubmitting: boolean;
-  error: Error | null;
+  error: CheckoutError | null;
+}
+
+// "for 3 more weeks", or "until you end the rental" for an open-ended one.
+function laterWeeksNote(weeks: number | null, weekly: string): string {
+  if (weeks === 1) return "One week, charged today.";
+  if (weeks === null) return `First week, charged today. Then ${weekly} / week until you end it.`;
+
+  const more = weeks - 1;
+  return `First week, charged today. Then ${weekly} / week for ${more} more ${more === 1 ? "week" : "weeks"}.`;
 }
 
 /** What the visitor is renting, what it costs today and every week, and the pay button. */
 export function OrderSummary({
-  cart,
+  order,
   formId,
   placedNumber,
   isSubmitting,
   error,
 }: OrderSummaryProps) {
-  const { location, plan } = useRentalPlan();
-  const { summary, currency } = cart;
+  const { locations } = useRentalPlan();
+  // A placed order keeps its own city and day, whatever the plan says now.
+  const location = locations.find((candidate) => candidate.id === order.locationId);
+  const { summary, currency, lines, leftOut: left } = order;
   const money = (amount: number) => formatMoney(amount, currency);
 
-  // Only available lines become the rental, so only they are listed and priced.
-  const lines = cart.items.filter((item) => item.available);
-  const left = cart.items.length - lines.length;
   const units = lines.reduce((sum, item) => sum + item.quantity, 0);
 
   return (
@@ -63,18 +73,25 @@ export function OrderSummary({
         </div>
         <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
           <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-signal" />
-          {cityLabel(location)} · {formatDeliveryDate(plan.deliveryDate)}
+          {[location && cityLabel(location), formatDeliveryDate(order.deliveryDate)]
+            .filter(Boolean)
+            .join(" · ")}
         </p>
 
         <ul className="mt-5 flex flex-col">
           {lines.map((item) => (
-            <SummaryLine key={item.productId} item={item} currency={currency} />
+            <SummaryLine
+              key={item.productId}
+              item={item}
+              currency={currency}
+              locationId={order.locationId}
+            />
           ))}
         </ul>
         {left > 0 && (
           <p className="pt-3 text-[11px] text-muted-foreground">
             {left === 1 ? "1 item" : `${left} items`} in your cart {left === 1 ? "isn't" : "aren't"}{" "}
-            available in {location.name} right now and won't be included.
+            available{location ? ` in ${location.name}` : ""} right now and won't be included.
           </p>
         )}
 
@@ -100,23 +117,31 @@ export function OrderSummary({
           </p>
         </div>
         <p className="pt-2 text-[10px] text-muted-foreground">
-          {plan.weeks === 1
-            ? "One week, charged today."
-            : `First week, charged today. Then ${money(summary.weeklySubtotal)} / week for ${plan.weeks - 1} more ${plan.weeks === 2 ? "week" : "weeks"}.`}
+          {laterWeeksNote(order.weeks, money(summary.weeklySubtotal))}
         </p>
 
-        {error && (
+        {error ? (
           <Alert variant="destructive" className="mt-5">
             <RiErrorWarningLine />
             <AlertTitle>
-              {placedNumber ? "PayPal didn't open" : "Your order wasn't placed"}
+              {error.step === "pay" ? "PayPal didn't open" : "Your order wasn't placed"}
             </AlertTitle>
             <AlertDescription>
-              {placedNumber
+              {error.step === "pay" && placedNumber
                 ? `Order ${placedNumber} is saved and nothing was charged. ${error.message}`
                 : error.message}
             </AlertDescription>
           </Alert>
+        ) : (
+          placedNumber && (
+            <Alert className="mt-5">
+              <RiInformationLine />
+              <AlertTitle>Order {placedNumber} is waiting for payment</AlertTitle>
+              <AlertDescription>
+                Nothing has been charged yet. To change it, email {supportEmail}.
+              </AlertDescription>
+            </Alert>
+          )
         )}
 
         <Button
@@ -130,7 +155,7 @@ export function OrderSummary({
             {isSubmitting && <Spinner data-icon="inline-start" />}
             {isSubmitting
               ? "Opening PayPal…"
-              : placedNumber
+              : error?.step === "pay"
                 ? "Try PayPal again"
                 : "Continue with PayPal"}
           </span>
@@ -165,16 +190,21 @@ export function OrderSummary({
   );
 }
 
-function SummaryLine({ item, currency }: { item: CartItem; currency: string }) {
-  const { location } = useRentalPlan();
-  // Cart lines carry no spec line; the city's catalog overview has one per product.
-  const { data: overview } = useQuery(catalogOverviewQueryOptions(location.id));
+interface SummaryLineProps {
+  item: OrderLine;
+  currency: string;
+  locationId: string;
+}
+
+function SummaryLine({ item, currency, locationId }: SummaryLineProps) {
+  // Order lines carry no spec line; the city's catalog overview has one per product.
+  const { data: overview } = useQuery(catalogOverviewQueryOptions(locationId));
   const spec = overview?.productSummaries[item.productId];
 
   return (
     <li className="flex items-center gap-4 border-b py-3.5 first:border-t">
       <ProductImage
-        image={item.images[0]}
+        image={item.image}
         className="size-12 shrink-0 rounded-md border bg-paper"
         imageClassName="size-10"
       />

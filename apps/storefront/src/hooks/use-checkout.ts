@@ -1,11 +1,15 @@
-import type { Cart } from "@async-rent/core";
 import { useAuth } from "@clerk/tanstack-react-start";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useState } from "react";
+import { useEffect } from "react";
 
-import type { CheckoutDetailsInput } from "../lib/checkout";
-import { getCheckoutContact, placeOrder, startRentalPayment } from "../server/checkout";
+import type { CheckoutDetailsInput, OpenOrder } from "../lib/checkout";
+import {
+  getCheckoutContact,
+  getOpenOrder,
+  placeOrder,
+  startRentalPayment,
+} from "../server/checkout";
 import { useRentalPlan } from "./use-rental-plan";
 
 /** The contact details the signed-in visitor's checkout form starts with. */
@@ -20,57 +24,111 @@ export function useCheckoutContact() {
   });
 }
 
-/** An order placed on this visit, with the cart it was placed from. */
-export interface PlacedOrder {
-  number: string;
-  cart: Cart;
+function openOrderQueryOptions(userId: string | null | undefined) {
+  return queryOptions({
+    queryKey: ["open-order", userId ?? null],
+    queryFn: () => getOpenOrder(),
+  });
 }
 
-interface CheckoutVariables {
-  details: CheckoutDetailsInput;
-  cart: Cart;
+/** The signed-in visitor's order that is placed but not paid yet, or `null`. */
+export function useOpenOrder() {
+  const { isLoaded, isSignedIn, userId } = useAuth();
+
+  return useQuery({
+    ...openOrderQueryOptions(userId),
+    enabled: isLoaded && isSignedIn === true,
+  });
+}
+
+/** Which step of checkout failed: placing the order, or opening its payment. */
+export class CheckoutError extends Error {
+  constructor(
+    readonly step: "place" | "pay",
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : "Something went wrong. Try again.", { cause });
+  }
 }
 
 /**
  * Places the order and sends the visitor to PayPal. The order is placed once:
- * if PayPal then fails, another try only reopens the payment of the order
- * already placed, since its cart is gone and its stock is held.
+ * while it waits for payment, checkout shows it instead of the cart, and
+ * another try only reopens its payment, since its cart is gone and its stock
+ * is held.
  */
-export function useCheckout() {
+export function useCheckout(openOrder: OpenOrder | null) {
   const queryClient = useQueryClient();
+  const { userId } = useAuth();
   const { plan } = useRentalPlan();
   const place = useServerFn(placeOrder);
   const pay = useServerFn(startRentalPayment);
-  const [placed, setPlaced] = useState<PlacedOrder | null>(null);
+
+  async function placeOnce(details: CheckoutDetailsInput): Promise<string> {
+    const openOrderOptions = openOrderQueryOptions(userId);
+
+    try {
+      const { order } = await place({
+        data: {
+          ...details,
+          locationId: plan.locationId,
+          deliveryDate: plan.deliveryDate,
+          weeks: plan.weeks,
+        },
+      });
+      queryClient.setQueryData(openOrderOptions.queryKey, order);
+      return order.number;
+    } catch (error) {
+      // The order may exist even though the reply was lost, or another tab may
+      // have placed it: then carry on and pay that one.
+      const found = await queryClient
+        .fetchQuery({ ...openOrderOptions, staleTime: 0 })
+        .catch(() => null);
+      if (found) return found.number;
+
+      throw new CheckoutError("place", error);
+    } finally {
+      // Core emptied the cart, so the header and drawer should show it empty.
+      void queryClient.invalidateQueries({ queryKey: ["cart"] });
+    }
+  }
 
   const checkout = useMutation({
-    mutationFn: async ({ details, cart }: CheckoutVariables) => {
-      let number = placed?.number;
+    mutationFn: async (details: CheckoutDetailsInput | undefined) => {
+      let number = openOrder?.number;
       if (!number) {
-        ({ number } = await place({
-          data: {
-            ...details,
-            locationId: plan.locationId,
-            deliveryDate: plan.deliveryDate,
-            weeks: plan.weeks,
-          },
-        }));
-        setPlaced({ number, cart });
-        // Core emptied the cart, so the header and drawer should show it empty.
-        void queryClient.invalidateQueries({ queryKey: ["cart"] });
+        if (!details) throw new CheckoutError("place", new Error("Fill in your details first."));
+        number = await placeOnce(details);
       }
 
-      return pay({ data: { number } });
+      try {
+        return await pay({ data: { number } });
+      } catch (error) {
+        throw new CheckoutError("pay", error);
+      }
     },
     // Leaving for PayPal, or for the confirmation when the order was already paid.
     onSuccess: ({ redirectUrl }) => window.location.assign(redirectUrl),
   });
 
+  // Coming back from PayPal with the browser's Back button can restore this
+  // page as it was left, still "leaving". Start over, with the order reloaded.
+  const { reset } = checkout;
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      reset();
+      void queryClient.invalidateQueries({ queryKey: ["open-order"] });
+    };
+
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [reset, queryClient]);
+
   return {
-    placed,
     submit: checkout.mutate,
     /** True from the click until the browser has left for PayPal. */
     isSubmitting: checkout.isPending || checkout.isSuccess,
-    error: checkout.error,
+    error: checkout.error instanceof CheckoutError ? checkout.error : null,
   };
 }

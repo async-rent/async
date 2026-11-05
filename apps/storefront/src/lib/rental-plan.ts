@@ -76,6 +76,14 @@ export function earliestDeliveryDate(location: Pick<Location, "timezone">, now: 
   return addDays(todayIn(location.timezone, now), 1);
 }
 
+/** How far ahead a delivery can be booked, counted from the first slot. */
+const bookingWindowDays = 60;
+
+/** The last day a delivery can be booked for: an order holds its stock until then. */
+export function latestDeliveryDate(location: Pick<Location, "timezone">, now: Date): string {
+  return addDays(earliestDeliveryDate(location, now), bookingWindowDays);
+}
+
 export interface ResolveRentalPlanInput {
   stored: StoredRentalPlan;
   /** Cities open for rentals. */
@@ -91,7 +99,7 @@ export interface ResolvedRentalPlan {
 /**
  * Turns whatever the visitor stored into a plan the storefront can render: a
  * city (the stored one, else the default city, else the first one listed),
- * a delivery date no earlier than the city's first slot, and a rental length.
+ * a delivery date inside the city's booking window, and a rental length.
  * Returns `null` when no city is open yet.
  */
 export function resolveRentalPlan(input: ResolveRentalPlanInput): ResolvedRentalPlan | null {
@@ -104,9 +112,12 @@ export function resolveRentalPlan(input: ResolveRentalPlanInput): ResolvedRental
   if (!location) return null;
 
   const earliest = earliestDeliveryDate(location, now);
+  const latest = latestDeliveryDate(location, now);
   // ISO dates order the same way as strings.
   const deliveryDate =
-    stored.deliveryDate && stored.deliveryDate >= earliest ? stored.deliveryDate : earliest;
+    stored.deliveryDate && stored.deliveryDate >= earliest && stored.deliveryDate <= latest
+      ? stored.deliveryDate
+      : earliest;
 
   return {
     location,
