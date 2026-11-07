@@ -5,6 +5,7 @@ import { RiShoppingCart2Line, RiUser3Line } from "@remixicon/react";
 import { Link } from "@tanstack/react-router";
 
 import { cartUnitCount, useCart } from "../hooks/use-cart";
+import { useEnvironmentLabel } from "../hooks/use-environment";
 import { AudienceSwitch } from "./audience-switch";
 import { useCartDrawer } from "./cart/cart-drawer-context";
 import { CityPicker } from "./city-picker";
@@ -14,6 +15,8 @@ export function SiteHeader() {
   const { cart } = useCart();
   const { setOpen } = useCartDrawer();
   const cartCount = cartUnitCount(cart);
+  // Outside production the header names the deployment instead of "How it works".
+  const environmentLabel = useEnvironmentLabel();
 
   return (
     <header className="border-b bg-paper">
@@ -22,7 +25,13 @@ export function SiteHeader() {
           <Link to="/" aria-label="Async home" className="text-ink">
             <Logo className="h-9 w-auto" />
           </Link>
-          <span className="hidden text-sm text-ink sm:inline">How it works</span>
+          {environmentLabel ? (
+            <Badge variant="soft" className="hidden sm:inline-flex">
+              {environmentLabel}
+            </Badge>
+          ) : (
+            <span className="hidden text-sm text-ink sm:inline">How it works</span>
+          )}
         </div>
 
         <div className="flex min-w-0 items-center gap-2 sm:gap-4.5">

@@ -6,6 +6,9 @@
   "observability": {
     "enabled": true,
   },
+  // Which deployment this is. Every page but "prod" says so in the header.
+  // Vars are not inherited, so each environment sets its own.
+  "vars": { "ENVIRONMENT": "prod" },
   // Same database as the root wrangler.jsonc, which applies its migrations.
   "d1_databases": [
     {
@@ -17,6 +20,7 @@
   "env": {
     "dev": {
       "name": "async-rent-storefront-dev",
+      "vars": { "ENVIRONMENT": "dev" },
       "d1_databases": [
         {
           "binding": "DATABASE",
@@ -27,6 +31,7 @@
     },
     "staging": {
       "name": "async-rent-storefront-staging",
+      "vars": { "ENVIRONMENT": "staging" },
       "d1_databases": [
         {
           "binding": "DATABASE",

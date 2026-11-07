@@ -4,6 +4,7 @@ import { TanStackDevtools } from "@tanstack/react-devtools";
 
 import { CartDrawer } from "../components/cart/cart-drawer";
 import { CartDrawerProvider } from "../components/cart/cart-drawer-context";
+import { environmentQueryOptions } from "../hooks/use-environment";
 import { storefrontQueryOptions } from "../hooks/use-rental-plan";
 import ClerkProvider from "../integrations/clerk/provider";
 
@@ -50,8 +51,14 @@ export const Route = createRootRouteWithContext<AppContext>()({
     ],
   }),
   // Cities and the visitor's rental plan: every page reads them through useRentalPlan.
-  loader: ({ context: { queryClient } }) =>
-    queryClient.query({ ...storefrontQueryOptions, staleTime: "static" }),
+  // The environment names a non-production deployment in the header.
+  loader: async ({ context: { queryClient } }) => {
+    const [storefront] = await Promise.all([
+      queryClient.query({ ...storefrontQueryOptions, staleTime: "static" }),
+      queryClient.query({ ...environmentQueryOptions, staleTime: "static" }),
+    ]);
+    return storefront;
+  },
   shellComponent: RootDocument,
   component: RootLayout,
 });
