@@ -91,11 +91,12 @@ export function AllEquipment({ filters, categories, onFiltersChange }: AllEquipm
       });
     });
 
+  // The scroll margin keeps the heading clear of the search pinned to the top.
   return (
     <section
       id="all-equipment"
       aria-labelledby="all-equipment-heading"
-      className="mx-auto flex w-full max-w-360 scroll-mt-6 flex-col gap-6 px-5 pb-20 md:px-10 xl:px-20"
+      className="mx-auto flex w-full max-w-360 scroll-mt-28 flex-col gap-6 px-5 pb-20 md:px-10 xl:px-20"
     >
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
         <div className="flex flex-col gap-1">
