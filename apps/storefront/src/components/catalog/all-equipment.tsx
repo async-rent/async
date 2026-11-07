@@ -24,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@async-rent/ui/components/select";
-import { Separator } from "@async-rent/ui/components/separator";
 import { Skeleton } from "@async-rent/ui/components/skeleton";
 import { Spinner } from "@async-rent/ui/components/spinner";
 import { toast } from "@async-rent/ui/components/toast";
@@ -197,27 +196,18 @@ export function AllEquipment({ filters, categories, onFiltersChange }: AllEquipm
             ))}
           </ul>
 
-          <div className="flex items-center justify-center gap-5 pt-4">
-            <p
-              aria-live="polite"
-              className="font-mono text-[9px] leading-3 tracking-[0.12em] text-muted-foreground uppercase"
-            >
-              Showing {cards.length} of {total}
-            </p>
-            {query.hasNextPage && (
-              <>
-                <Separator className="w-12" />
-                <Button variant="outline" disabled={query.isFetchingNextPage} onClick={loadMore}>
-                  Load {Math.min(equipmentPageSize, remaining) || equipmentPageSize} more
-                  {query.isFetchingNextPage ? (
-                    <Spinner data-icon="inline-end" />
-                  ) : (
-                    <RiArrowDownLine data-icon="inline-end" />
-                  )}
-                </Button>
-              </>
-            )}
-          </div>
+          {query.hasNextPage && (
+            <div className="flex justify-center pt-4">
+              <Button variant="outline" disabled={query.isFetchingNextPage} onClick={loadMore}>
+                Load {Math.min(equipmentPageSize, remaining) || equipmentPageSize} more
+                {query.isFetchingNextPage ? (
+                  <Spinner data-icon="inline-end" />
+                ) : (
+                  <RiArrowDownLine data-icon="inline-end" />
+                )}
+              </Button>
+            </div>
+          )}
         </>
       )}
     </section>

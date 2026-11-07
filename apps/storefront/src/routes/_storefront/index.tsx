@@ -70,8 +70,8 @@ function CatalogPage() {
       />
       {overview ? (
         <>
-          <CategoryIndex overview={overview} activeCategory={search.category} />
           <Bundles overview={overview} />
+          <CategoryIndex overview={overview} activeCategory={search.category} />
           <AllEquipment
             filters={search}
             categories={overview.categories}
@@ -92,12 +92,12 @@ function CatalogSectionsSkeleton() {
       className="mx-auto flex w-full max-w-360 flex-col gap-6 px-5 pb-16 md:px-10 xl:px-20"
     >
       <Skeleton className="h-10 w-60" />
+      <Skeleton className="h-120 rounded-xl" />
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         {[0, 1, 2, 3, 4, 5].map((tile) => (
           <Skeleton key={tile} className="h-34" />
         ))}
       </div>
-      <Skeleton className="h-120 rounded-xl" />
     </div>
   );
 }
