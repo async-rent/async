@@ -374,48 +374,49 @@ ON CONFLICT (product_id, position) DO UPDATE SET
 -- ---------------------------------------------------------------------------
 -- Weekly prices per city.
 --
--- Each product has a base weekly price, deposit and stock. City factors turn
--- the base into local prices (rounded to the nearest 50 cents): Bali is the
--- base, Chiang Mai and Da Nang run slightly cheaper, Lisbon slightly higher.
+-- Each product has a base weekly price and stock. City factors turn the base
+-- into local prices (rounded to the nearest 50 cents): Bali is the base,
+-- Chiang Mai and Da Nang run slightly cheaper, Lisbon slightly higher. The
+-- deposit is 25% of the local weekly price, rounded to the nearest cent.
 -- Every product is offered in all four launch cities.
 -- ---------------------------------------------------------------------------
 
-WITH bases(product_id, weekly, deposit, stock) AS (
+WITH bases(product_id, weekly, stock) AS (
   VALUES
-    ('prd_smartdesk_pro',        1200, 15000, 4),
-    ('prd_smartdesk_compact',     900, 10000, 3),
-    ('prd_oak_writing_desk',      700,  8000, 3),
-    ('prd_corner_l_desk',        1100, 13000, 2),
-    ('prd_ergonomic_task_chair',  900, 12000, 5),
-    ('prd_lumbar_pro_chair',     1200, 15000, 3),
-    ('prd_light_travel_chair',    500,  5000, 4),
-    ('prd_saddle_stool',          600,  6000, 2),
-    ('prd_kneeling_chair',        500,  5000, 2),
-    ('prd_ultrasharp_27_4k',      700, 15000, 6),
-    ('prd_studio_display_27',    1500, 25000, 4),
-    ('prd_portable_15_oled',      600,  8000, 5),
-    ('prd_ultrawide_34',         1200, 20000, 2),
-    ('prd_standard_24',           400,  5000, 6),
-    ('prd_27_1440_ips',           500,  7000, 4),
-    ('prd_arc_floor_lamp',        300,  3000, 6),
-    ('prd_desk_lamp',             200,  2000, 8),
-    ('prd_ring_light_12',         300,  2000, 5),
-    ('prd_led_strip_light',       200,  1000, 8),
-    ('prd_clip_reading_light',    100,  1000, 10),
-    ('prd_smart_bulb_kit',        300,  2000, 6),
-    ('prd_low_profile_keyboard',  200,  3000, 8),
-    ('prd_mx_master_3s',          200,  3000, 8),
-    ('prd_usb_c_hub',             400,  3000, 6),
-    ('prd_monitor_riser',         200,  2000, 6),
-    ('prd_studio_webcam_4k',      300,  4000, 5),
-    ('prd_power_strip_727',       300,  2000, 8),
-    ('prd_laptop_riser',          200,  2000, 8),
-    ('prd_setup_full',           2500, 40000, 2),
+    ('prd_smartdesk_pro',        1200, 4),
+    ('prd_smartdesk_compact',     900, 3),
+    ('prd_oak_writing_desk',      700, 3),
+    ('prd_corner_l_desk',        1100, 2),
+    ('prd_ergonomic_task_chair',  900, 5),
+    ('prd_lumbar_pro_chair',     1200, 3),
+    ('prd_light_travel_chair',    500, 4),
+    ('prd_saddle_stool',          600, 2),
+    ('prd_kneeling_chair',        500, 2),
+    ('prd_ultrasharp_27_4k',      700, 6),
+    ('prd_studio_display_27',    1500, 4),
+    ('prd_portable_15_oled',      600, 5),
+    ('prd_ultrawide_34',         1200, 2),
+    ('prd_standard_24',           400, 6),
+    ('prd_27_1440_ips',           500, 4),
+    ('prd_arc_floor_lamp',        300, 6),
+    ('prd_desk_lamp',             200, 8),
+    ('prd_ring_light_12',         300, 5),
+    ('prd_led_strip_light',       200, 8),
+    ('prd_clip_reading_light',    100, 10),
+    ('prd_smart_bulb_kit',        300, 6),
+    ('prd_low_profile_keyboard',  200, 8),
+    ('prd_mx_master_3s',          200, 8),
+    ('prd_usb_c_hub',             400, 6),
+    ('prd_monitor_riser',         200, 6),
+    ('prd_studio_webcam_4k',      300, 5),
+    ('prd_power_strip_727',       300, 8),
+    ('prd_laptop_riser',          200, 8),
+    ('prd_setup_full',           2500, 2),
     -- Focus setup: $1 under the sum of its parts (desk + keyboard + mouse =
     -- $16 base), so every setup stays cheaper than booking its pieces
     -- separately, like the full and studio setups.
-    ('prd_setup_focus',          1500, 25000, 2),
-    ('prd_setup_studio',         2100, 35000, 2)
+    ('prd_setup_focus',          1500, 2),
+    ('prd_setup_studio',         2100, 2)
 ),
 cities(slug, factor) AS (
   VALUES
@@ -423,18 +424,26 @@ cities(slug, factor) AS (
     ('chiang-mai', 0.9),
     ('da-nang',    0.9),
     ('lisbon',     1.1)
+),
+local_prices(product_id, location_id, weekly_price, stock) AS (
+  SELECT
+    b.product_id,
+    l.id,
+    CAST(ROUND(b.weekly * c.factor / 50.0) * 50 AS INTEGER),
+    b.stock
+  FROM bases b
+  CROSS JOIN cities c
+  JOIN locations l ON l.slug = c.slug
 )
 INSERT INTO product_prices (product_id, location_id, weekly_price, deposit, stock, created_at)
 SELECT
-  b.product_id,
-  l.id,
-  CAST(ROUND(b.weekly * c.factor / 50.0) * 50 AS INTEGER),
-  b.deposit,
-  b.stock,
+  product_id,
+  location_id,
+  weekly_price,
+  CAST(ROUND(weekly_price * 0.25) AS INTEGER),
+  stock,
   unixepoch() * 1000
-FROM bases b
-CROSS JOIN cities c
-JOIN locations l ON l.slug = c.slug
+FROM local_prices
 WHERE true
 ON CONFLICT (product_id, location_id) DO UPDATE SET
   weekly_price = excluded.weekly_price,
