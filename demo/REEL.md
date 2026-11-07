@@ -1,7 +1,7 @@
 # The reel: hook, turn, demo
 
 **Spec:** 1920x1080@60, 49.9 s, format: hook reel (problem, solution, product in action), audio: licensed track and
-recorded effects (no voice-over, no typing sounds, by request).
+recorded effects (no voice-over, no typing sounds, no whoosh on motion, by request).
 
 **Idea.** A nomad got the villa with the pool, and the desk is the dining table; nobody buys a desk for two weeks,
 so they rent the setup by the week, and Claude does it for them through Async.
@@ -41,9 +41,10 @@ product screens keep their own faces. The standalone `Film` keeps Figtree and it
   |---|---|---|
   | the six cursor presses | mixkit-275, one click trimmed | "a single computer mouse button click" strong, z +3.9; p_real 0.94 |
   | Payment approved | mixkit-2575 | "a success chime" z +4.1; beat the bell chime in an A/B (z +3.0 vs +1.8) |
-  | tiles gather into the card | mixkit-168 | "a fast whoosh" z +4.5; p_real 0.89 |
 
-  The closing logo motion has no effect and no music hit: the music has faded out before it.
+  No whoosh on any motion, by request: the tiles gather into the card under the music's stop-down alone (the
+  mixkit-168 whoosh there was dropped). The closing logo motion has no effect and no music hit: the music has faded
+  out before it.
 
   `npx tsx scripts/reel-cues.ts` writes the cue frames from the timeline; `python scripts/reel-sfx.py` levels each take
   against the music around its cue (no ducking), fades the music out before the logo pop (a low hall tail on the fade) and masters to -14 LUFS, -1.5 dBTP.

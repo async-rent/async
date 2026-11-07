@@ -17,10 +17,9 @@ const events = [
 ].sort((a, b) => a.f - b.f);
 
 /** align: 'onset' puts the take's attack on the frame; 'peak' puts its loudest moment there (a whoosh's apex, a boom). */
-type Sfx = { f: number; role: 'click' | 'success' | 'whoosh.gather'; align: 'onset' | 'peak'; id: string };
+type Sfx = { f: number; role: 'click' | 'success'; align: 'onset' | 'peak'; id: string };
 const sfx: Sfx[] = [
-  // the tiles converge into one card: the whoosh peaks as they meet, then the music's stop-down, then the drop
-  { f: Math.round((CUE.gather + CUE.stop) / 2), role: 'whoosh.gather', align: 'peak', id: 'gather' }, // peaks on the tiles' fastest frame
+  // no whoosh on any motion, by request: the tiles gather into the card under the music's stop-down alone
   // every press of the cursor
   ...(['send', 'pickSetup', 'pickLamp', 'pickMouse', 'continue', 'pay'] as const).map((k) => ({ f: D(k), role: 'click' as const, align: 'onset' as const, id: k })),
   // PayPal's button turns into "Payment approved"

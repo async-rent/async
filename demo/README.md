@@ -1,6 +1,6 @@
 # Async in Claude: the demo film
 
-A 37.5 s silent product demo (1920x1080, 60 fps) built in code with Remotion. It shows Claude.ai using the Async MCP
+A 37.5 s product demo (1920x1080, 60 fps) built in code with Remotion. It shows Claude.ai using the Async MCP
 tools to rent a cozy work setup in Bali for 2 weeks:
 
 1. **Promise.** The Async wordmark and "Rent your setup in Claude" on the Bali world, blurring into the prompt.
@@ -37,7 +37,7 @@ npm install
 npx tsc --noEmit && node scripts/lint-film.mjs src        # types and the film lint
 node scripts/frames.mjs still 900,1500,2100               # stills in out/stills/
 bash scripts/render.sh Film out/draft.mp4 --draft         # the whole film at half size, fast
-bash scripts/render.sh Film out/film.mp4 --no-audio       # the master (about 2 minutes)
+bash scripts/render.sh Film out/film.mp4 --audio public/audio/film.wav   # the master (about 2 minutes; the soundtrack: BRIEF.md "Sound")
 npm run studio                                            # scrub it in Remotion Studio
 ```
 

@@ -1,0 +1,35 @@
+{
+  "key": "C minor",
+  "music": {
+    "track": "audio/music/dance_floor_coverr.mp3",
+    "edit": "audio/music/film-edit.json",
+    "licence": "audio/music/dance_floor_coverr.licence.json",
+    "gain_db": 0
+  },
+  "sfx": {
+    "engine": "auto",
+    "kit": "audio/kit.json",
+    "python": null
+  },
+  "stopdowns": {
+    "auto": "off",
+    "add": [],
+    "skip": [],
+    "quiet_db": -7
+  },
+  "ending": {
+    "mode": "fade",
+    "at": "@end"
+  },
+  "typing": "off",
+  "payoff": "@reveal",
+  "mix": {
+    "music": 1.0,
+    "sfx": 1.0
+  },
+  "master": {
+    "lufs": -14,
+    "ceiling": 0.77,
+    "fade": 1.3
+  }
+}

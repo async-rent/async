@@ -1,6 +1,7 @@
 # Brief
 
-**Spec:** 1920x1080@60, 37.5 s, format: prompt run on Claude.ai (product demo), audio: none (silent by request).
+**Spec:** 1920x1080@60, 37.5 s, format: prompt run on Claude.ai (product demo), audio: licensed music bed with
+recorded effects on the cursor's presses and the payment (no typing sounds, no whoosh on motion, by request).
 
 **The case.** A nomad who just landed in Canggu asks Claude.ai for a cozy work setup in Bali for 2 weeks. Claude
 uses the Async MCP tools, renders Async's MCP Apps inside the chat (a setup picker, then a checkout), the user picks
@@ -48,7 +49,8 @@ The film shows two real products' screens, so their own looks override the house
 
 ## Departures from the cinetic standard, on purpose
 
-- **No audio.** The user asked for a silent demo; no track, no effects, no `npm run sound`.
+- **Effects on presses and the payment only.** No typing sounds and no whoosh on any motion (the camera, the apps
+  mounting, the check's flight, the end card), by request. The mix is `scripts/reel-sfx.py --film`, not `npm run sound`.
 - **UI at web size under a camera.** Claude's UI is laid out at web px in a 1280x760 window (x1.3 on the stage) and
   the camera scales it 1.0-3.0x; lint's small-text warnings read the web px, not the size on screen.
 - **Length.** 37.5 s, longer than the 18-20 s prompt-run template, because the brief asks for the whole flow
@@ -58,3 +60,29 @@ The film shows two real products' screens, so their own looks override the house
 
 No invented copy or numbers (every price and string is the product's; the 25% deposit is from the brief), no drawn stand-ins for products (real
 photos), no sparkles or confetti, no fake metrics, no credits in the picture.
+
+## Sound
+
+- **Music:** "dance floor" by Coverr (Coverr License, no credit needed; record in
+  `audio/music/dance_floor_coverr.licence.json`), the reel's track, with its own edit in `audio/music/film-edit.json`
+  (`track.py edit --map 1:5x4,5:9x13,18:25x2 --film-t0 0 --end fade --fade 2.0`): film bars 1-4 = the intro's second
+  half under the wordmark and the typing, the track's entry on bar 5 (7.50 s, just after Send), the body under the
+  tools, the pick and the payment (the loudest 3 s land on "Payment approved", 24-27 s), and the break (source bars
+  25-26) under the end card from 31.875 s, fading out from 35.6 s with the picture. No stop-downs, no hit on the logo.
+- **Effects:** the reel's two Mixkit takes, re-auditioned with earshot for the Film (`out/film/sfx-audition.py`):
+
+  | Role | Cues | Take | earshot |
+  |---|---|---|---|
+  | cursor press | Send, the three picks, Continue, PayPal | mixkit-275, 0.107-0.250 s | rank z +5.1 of 8 click files; trim "a single computer mouse button click" strong, z +3.9; p_real 0.94 |
+  | Payment approved | 25.20 s | mixkit-2575, 0.058-1.20 s | rank z +3.4 trim (z +3.9 file, the only strong one of 5 chimes); p_real 0.36, uncertain (a designed UI tone; kept) |
+
+- **Mix:** each take levelled against the music around its cue, no ducking, mastered to -14.0 LUFS, -1.6 dBTP.
+  earshot critique on `out/film.mp4`: launch-grade, 22 of 22 metrics in range; every press lands within 1 frame
+  (`earshot sheet`, `out/qa/film-sheet.png`), its 3-12 kHz click 16-26 dB over the music's median highs.
+
+```sh
+export PYTHON=$PWD/.tools/venv/bin/python   # earshot + the cinetic scripts' packages
+node scripts/py.mjs scripts/audio/score.py --score audio/film-score.json --bed-only --out public/audio/film-bed.wav
+npx tsx scripts/film-cues.ts && $PYTHON scripts/reel-sfx.py --film      # -> public/audio/film.wav
+bash scripts/render.sh Film out/film.mp4 --audio public/audio/film.wav  # or --join-only over the rendered parts
+```

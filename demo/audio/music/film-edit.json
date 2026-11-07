@@ -1,0 +1,155 @@
+{
+ "edit": 1,
+ "track": "audio/music/dance_floor_coverr.mp3",
+ "analysis": "audio/music/dance_floor_coverr.track.json",
+ "licence": "audio/music/dance_floor_coverr.licence.json",
+ "sha256": "58a752bdad0967784d43640f0c4eb355baeee0336f896aebe5e5c939428c3e54",
+ "bpm": 128.0,
+ "beat_s": 0.46875,
+ "beats_per_bar": 4,
+ "film_t0": 0.0,
+ "film_bars": 19,
+ "phrase_len": 8,
+ "args": {
+  "bars": 19,
+  "reveal_bar": 18,
+  "end": "fade",
+  "start_bar": null,
+  "entry": null,
+  "film_t0": 0.0,
+  "fade": 2.0,
+  "arc": null,
+  "map": "1:5x4,5:9x13,18:25x2"
+ },
+ "reveal": {
+  "film_bar": 18,
+  "src_bar": 25,
+  "film_s": 31.875
+ },
+ "segments": [
+  {
+   "film_bar": 1,
+   "src_bar": 5,
+   "bars": 17,
+   "film_s": 0.0,
+   "src_from": 7.501,
+   "src_to": 39.376
+  },
+  {
+   "film_bar": 18,
+   "src_bar": 25,
+   "bars": 2,
+   "film_s": 31.875,
+   "src_from": 45.001,
+   "src_to": 48.761,
+   "join": {
+    "pre_ms": 8.0,
+    "tail_ms": 150.0
+   }
+  }
+ ],
+ "joins": [
+  {
+   "film_s": 31.875,
+   "film_bar": 18,
+   "src_in": 45.001,
+   "src_out": 39.376,
+   "tail_ms": 150.0
+  }
+ ],
+ "ending": {
+  "mode": "fade",
+  "fade_from_film_s": 35.635,
+  "fade_s": 2.0,
+  "end_s": 35.635,
+  "hold_s": 2.0
+ },
+ "track_dips": [
+  {
+   "film_s": 31.875,
+   "depth_db": null,
+   "kind": "break"
+  }
+ ],
+ "film": {
+  "downbeats": [
+   0.0,
+   1.875,
+   3.75,
+   5.625,
+   7.5,
+   9.375,
+   11.251,
+   13.124,
+   15.001,
+   16.874,
+   18.75,
+   20.624,
+   22.499,
+   24.375,
+   26.25,
+   28.125,
+   30.001,
+   31.875,
+   33.75,
+   35.635
+  ],
+  "accents": [
+   {
+    "t": 7.5,
+    "db": 8.5,
+    "band": "low"
+   },
+   {
+    "t": 7.851,
+    "db": 6.4,
+    "band": "mid"
+   },
+   {
+    "t": 7.967,
+    "db": 7.3,
+    "band": "high"
+   }
+  ],
+  "entries": [
+   7.5,
+   31.875
+  ],
+  "breaks": [
+   {
+    "from": 31.875,
+    "to": 33.75
+   }
+  ],
+  "stops": [],
+  "phrases": [
+   7.5,
+   22.499,
+   31.875
+  ],
+  "sections": [
+   {
+    "from": 0.0,
+    "to": 7.5,
+    "label": "intro"
+   },
+   {
+    "from": 7.5,
+    "to": 31.875,
+    "label": "body"
+   },
+   {
+    "from": 31.875,
+    "to": 35.635,
+    "label": "break"
+   }
+  ]
+ },
+ "key": "C minor",
+ "key_r": 0.812,
+ "cost": {
+  "total": 0.0,
+  "splices": 1
+ },
+ "muffled_bars": []
+}

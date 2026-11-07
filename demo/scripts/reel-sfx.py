@@ -4,10 +4,13 @@ cue frames (out/reel-sfx.json, from scripts/reel-cues.ts), each levelled against
 stop-downs, before the drop and before the logo, are part of the bed).
 
     python scripts/reel-sfx.py            # -> public/audio/reel.wav and out/qa/reel-sfx.json (the gains it set)
+    python scripts/reel-sfx.py --film     # the Film: film-bed.wav + out/film-sfx.json -> public/audio/film.wav
 
 The takes are trims of Mixkit recordings (Mixkit Sound Effects Free License, records in audio/sfx/*.licence.json),
-chosen with earshot (out/reel/sfx-audition*.py): rank by the role's description, find for the trim, realness, A/B.
+chosen with earshot (out/reel/sfx-audition*.py, out/film/sfx-audition.py): rank by the role's description, find for
+the trim, realness, A/B.
 """
+import argparse
 import json
 import os
 import sys
@@ -19,10 +22,14 @@ from scipy.signal import fftconvolve, lfilter, resample_poly
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 SR = 48000
-BED = os.path.join(ROOT, 'public', 'audio', 'reel-bed.wav')
-OUT = os.path.join(ROOT, 'public', 'audio', 'reel.wav')
-CUES = os.path.join(ROOT, 'out', 'reel-sfx.json')
-REPORT = os.path.join(ROOT, 'out', 'qa', 'reel-sfx.json')
+
+def paths(name):
+    """The bed, the mix, the effect cues and the report of one composition: 'reel' or 'film'."""
+    return dict(bed=os.path.join(ROOT, 'public', 'audio', f'{name}-bed.wav'), out=os.path.join(ROOT, 'public', 'audio', f'{name}.wav'),
+                cues=os.path.join(ROOT, 'out', f'{name}-sfx.json'), report=os.path.join(ROOT, 'out', 'qa', f'{name}-sfx.json'))
+
+
+
 TARGET_LUFS = -14.0
 CEILING_DBTP = -1.5
 BEAT_S = 60 / 128  # the track's beat
@@ -129,6 +136,10 @@ def true_peak_limit(x, ceiling_db):
 
 
 def main():
+    ap = argparse.ArgumentParser(description='mix the recorded effects over the edited music bed and master')
+    ap.add_argument('--film', action='store_true', help='the Film (src/demo) instead of the Reel')
+    p = paths('film' if ap.parse_args().film else 'reel')
+    BED, OUT, CUES, REPORT = p['bed'], p['out'], p['cues'], p['report']
     cues = json.load(open(CUES))
     fps, total = cues['fps'], cues['total']
     n = int(round(total / fps * SR))
