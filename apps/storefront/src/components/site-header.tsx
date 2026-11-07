@@ -5,6 +5,7 @@ import { RiShoppingCart2Line, RiUser3Line } from "@remixicon/react";
 import { Link } from "@tanstack/react-router";
 
 import { cartUnitCount, useCart } from "../hooks/use-cart";
+import { AudienceSwitch } from "./audience-switch";
 import { useCartDrawer } from "./cart/cart-drawer-context";
 import { CityPicker } from "./city-picker";
 import { Logo } from "./logo";
@@ -25,6 +26,7 @@ export function SiteHeader() {
         </div>
 
         <div className="flex min-w-0 items-center gap-2 sm:gap-4.5">
+          <AudienceSwitch />
           {/* Long city names truncate on narrow screens instead of pushing the page sideways. */}
           <CityPicker className="min-w-0" />
           <span

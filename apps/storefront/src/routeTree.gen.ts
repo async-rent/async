@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as StorefrontRouteImport } from './routes/_storefront'
 import { Route as CheckoutRouteRouteImport } from './routes/checkout/route'
 import { Route as StorefrontIndexRouteImport } from './routes/_storefront/index'
+import { Route as StorefrontAgentsRouteImport } from './routes/_storefront/agents'
 import { Route as CheckoutIndexRouteImport } from './routes/checkout/index'
 import { Route as CheckoutApprovedRouteImport } from './routes/checkout/approved'
 import { Route as CheckoutCancelledRouteImport } from './routes/checkout/cancelled'
@@ -28,6 +29,11 @@ const CheckoutRouteRoute = CheckoutRouteRouteImport.update({
 const StorefrontIndexRoute = StorefrontIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => StorefrontRoute,
+} as any)
+const StorefrontAgentsRoute = StorefrontAgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
   getParentRoute: () => StorefrontRoute,
 } as any)
 const CheckoutIndexRoute = CheckoutIndexRouteImport.update({
@@ -49,11 +55,13 @@ const CheckoutCancelledRoute = CheckoutCancelledRouteImport.update({
 export interface FileRoutesByFullPath {
   '/checkout': typeof CheckoutRouteRouteWithChildren
   '/': typeof StorefrontIndexRoute
+  '/agents': typeof StorefrontAgentsRoute
   '/checkout/approved': typeof CheckoutApprovedRoute
   '/checkout/cancelled': typeof CheckoutCancelledRoute
   '/checkout/': typeof CheckoutIndexRoute
 }
 export interface FileRoutesByTo {
+  '/agents': typeof StorefrontAgentsRoute
   '/checkout/approved': typeof CheckoutApprovedRoute
   '/checkout/cancelled': typeof CheckoutCancelledRoute
   '/': typeof StorefrontIndexRoute
@@ -63,6 +71,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/checkout': typeof CheckoutRouteRouteWithChildren
   '/_storefront': typeof StorefrontRouteWithChildren
+  '/_storefront/agents': typeof StorefrontAgentsRoute
   '/checkout/approved': typeof CheckoutApprovedRoute
   '/checkout/cancelled': typeof CheckoutCancelledRoute
   '/_storefront/': typeof StorefrontIndexRoute
@@ -73,15 +82,18 @@ export interface FileRouteTypes {
   fullPaths:
     | '/checkout'
     | '/'
+    | '/agents'
     | '/checkout/approved'
     | '/checkout/cancelled'
     | '/checkout/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/checkout/approved' | '/checkout/cancelled' | '/' | '/checkout'
+  to:
+    '/agents' | '/checkout/approved' | '/checkout/cancelled' | '/' | '/checkout'
   id:
     | '__root__'
     | '/checkout'
     | '/_storefront'
+    | '/_storefront/agents'
     | '/checkout/approved'
     | '/checkout/cancelled'
     | '/_storefront/'
@@ -114,6 +126,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof StorefrontIndexRouteImport
+      parentRoute: typeof StorefrontRoute
+    }
+    '/_storefront/agents': {
+      id: '/_storefront/agents'
+      path: '/agents'
+      fullPath: '/agents'
+      preLoaderRoute: typeof StorefrontAgentsRouteImport
       parentRoute: typeof StorefrontRoute
     }
     '/checkout/': {
@@ -157,10 +176,12 @@ const CheckoutRouteRouteWithChildren = CheckoutRouteRoute._addFileChildren(
 )
 
 interface StorefrontRouteChildren {
+  StorefrontAgentsRoute: typeof StorefrontAgentsRoute
   StorefrontIndexRoute: typeof StorefrontIndexRoute
 }
 
 const StorefrontRouteChildren: StorefrontRouteChildren = {
+  StorefrontAgentsRoute: StorefrontAgentsRoute,
   StorefrontIndexRoute: StorefrontIndexRoute,
 }
 
