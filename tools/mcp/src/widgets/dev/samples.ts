@@ -219,7 +219,7 @@ const awaitingApproval = result({
 
 const notApproved = toolError(
   "payment_not_approved",
-  "Payment pay_1 is not approved at the provider yet",
+  "The customer has not approved the payment at the provider yet",
 );
 
 /**

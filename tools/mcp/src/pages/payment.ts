@@ -30,7 +30,7 @@ const page = (title: string, message: string) =>
 
 export const approvedPage = page(
   "Payment approved",
-  "Go back to your assistant. If it shows a PayPal checkout, that confirms your rental on its own; otherwise tell it you approved the payment, so it can confirm your rental. You can close this tab.",
+  "Go back to your assistant. If it shows a PayPal checkout that hasn't confirmed your rental yet, press I've approved there; otherwise tell your assistant you approved the payment, so it can confirm your rental. You can close this tab.",
 );
 
 export const cancelledPage = page(

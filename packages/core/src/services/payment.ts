@@ -613,7 +613,7 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
         case "order_not_approved":
           return err(
             "payment_not_approved",
-            `Payment ${row.id} is not approved at the provider yet`,
+            "The customer has not approved the payment at the provider yet",
             captured.error,
           );
         default:

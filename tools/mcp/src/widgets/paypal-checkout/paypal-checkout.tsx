@@ -1,3 +1,4 @@
+import type { ConfirmPaymentResult } from "@async-rent/core";
 import { Button } from "@async-rent/ui/components/button";
 import { Spinner } from "@async-rent/ui/components/spinner";
 import type { App } from "@modelcontextprotocol/ext-apps/react";
@@ -10,7 +11,7 @@ import {
   RiTimeLine,
 } from "@remixicon/react";
 import { cn } from "cn";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CustomerPayment } from "../../shared/payments";
 import type { ConfirmPaymentOutput } from "../../tools/confirm-payment";
 import type { StartPaymentInput, StartPaymentOutput } from "../../tools/start-payment";
@@ -28,13 +29,17 @@ const watchInterval = 5_000;
 /** How long it keeps asking before leaving it to the I've approved button. */
 const watchWindow = 5 * 60_000;
 
+type ConfirmErrorCode = Extract<ConfirmPaymentResult, { success: false }>["error"]["code"];
+
 // confirm_payment failures a later check can clear: no approval yet, money on
 // hold, or PayPal unreachable. The rest need the assistant.
-const retryableCodes: ReadonlySet<string> = new Set([
+const retryableCodes: ReadonlySet<string> = new Set<ConfirmErrorCode>([
   "payment_not_approved",
   "payment_pending",
   "provider_request_failed",
 ]);
+
+const notApprovedCode: ConfirmErrorCode = "payment_not_approved";
 
 /**
  * The start_payment result as a PayPal checkout: the total due today, a Pay with
@@ -92,6 +97,12 @@ type Outcome =
 
 type Check = { kind: "idle" } | { kind: "checking" } | Outcome;
 
+/** An outcome checking again can't change: the checkout stops asking. */
+function isFinal(outcome: Outcome): boolean {
+  if (outcome.kind === "failed") return !outcome.retryable;
+  return outcome.kind !== "not_approved";
+}
+
 interface CheckoutProps {
   app: App;
   payment: CustomerPayment;
@@ -104,17 +115,27 @@ function Checkout({ app, payment, approvalUrl, number }: CheckoutProps) {
   // Set while the checkout asks for the approval on its own.
   const [watchUntil, setWatchUntil] = useState<number>();
   const [linkBlocked, setLinkBlocked] = useState(false);
+  // A poll and a press can both see the final outcome; the assistant hears it once.
+  const reported = useRef(false);
 
-  // An outcome the customer can't change by checking again ends the watch and
-  // reaches the assistant.
+  function report(outcome: Outcome) {
+    if (!number || reported.current) return;
+    if (isFinal(outcome)) reported.current = true;
+    void reportOutcome(app, number, outcome);
+  }
+
+  // A final outcome ends the watch and reaches the assistant.
   function settle(outcome: Outcome) {
     setCheck(outcome);
-    if (outcome.kind === "not_approved") return;
-    if (outcome.kind === "failed" && outcome.retryable) return;
+    if (!isFinal(outcome)) return;
 
     setWatchUntil(undefined);
-    if (number) void reportOutcome(app, number, outcome);
+    report(outcome);
   }
+
+  // The latest settle, so a poll started earlier reports through the current one.
+  const latestSettle = useRef(settle);
+  latestSettle.current = settle;
 
   useEffect(() => {
     if (watchUntil === undefined || !number) return;
@@ -125,20 +146,16 @@ function Checkout({ app, payment, approvalUrl, number }: CheckoutProps) {
       const outcome = await confirm(app, number);
       if (!current) return;
 
-      const settled =
-        outcome.kind === "paid" ||
-        outcome.kind === "declined" ||
-        (outcome.kind === "failed" && !outcome.retryable);
-      if (settled) {
-        setCheck(outcome);
-        setWatchUntil(undefined);
-        void reportOutcome(app, number, outcome);
+      if (isFinal(outcome)) {
+        latestSettle.current(outcome);
         return;
       }
       if (Date.now() >= watchUntil) {
-        // Leave it to the customer to say when they have approved.
-        setCheck(outcome);
+        // Leave it to the customer to say when they have approved, and keep a
+        // check they started showing until it answers.
+        setCheck((shown) => (shown.kind === "checking" ? shown : outcome));
         setWatchUntil(undefined);
+        report(outcome);
         return;
       }
       timer = setTimeout(tick, watchInterval);
@@ -164,7 +181,8 @@ function Checkout({ app, payment, approvalUrl, number }: CheckoutProps) {
       return;
     }
     setCheck({ kind: "idle" });
-    setWatchUntil(Date.now() + watchWindow);
+    // Checking needs the rental's number; without it the customer tells the assistant.
+    if (number) setWatchUntil(Date.now() + watchWindow);
   }
 
   async function confirmApproval() {
@@ -228,7 +246,7 @@ async function confirm(app: App, number: string): Promise<Outcome> {
   const failure = errorMessage(result);
   if (failure !== undefined) {
     const code = errorCode(result);
-    if (code === "payment_not_approved") return { kind: "not_approved" };
+    if (code === notApprovedCode) return { kind: "not_approved" };
 
     // A host that drops the code leaves no way to tell, so checking again stays possible.
     return { kind: "failed", message: failure, retryable: !code || retryableCodes.has(code) };
@@ -329,8 +347,8 @@ function Status({ check, watching }: StatusProps) {
       </StatusLine>
     );
   }
-  // While watching, a check that may still clear stays quiet until the watch ends.
-  if (check.kind === "failed" && (!watching || !check.retryable)) {
+  // Polls only set a failure once the watch ends, so this one answers the customer.
+  if (check.kind === "failed") {
     return (
       <StatusLine icon={<RiErrorWarningLine />} tone="destructive">
         {check.message}
