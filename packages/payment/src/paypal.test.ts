@@ -323,6 +323,16 @@ describe("captureOrder", () => {
     });
   });
 
+  it("fails while the customer has not approved the order, so they can approve and retry", async () => {
+    const paypal = stubPayPal({ [capturePath]: paypalError(422, "ORDER_NOT_APPROVED") });
+
+    const result = await paypal.adapter.captureOrder(capture);
+
+    expect(result).toMatchObject(
+      failure("order_not_approved", "The customer has not approved PayPal order ORDER1 yet"),
+    );
+  });
+
   it("reports a declined capture as a failed charge", async () => {
     const paypal = stubPayPal({
       [capturePath]: {

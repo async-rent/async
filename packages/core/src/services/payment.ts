@@ -62,9 +62,10 @@ export const providerErrorCodeSchema = z
     "provider_refused",
     "provider_response_invalid",
     "payment_pending",
+    "order_not_approved",
   ])
   .describe(
-    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, or it has not settled the capture or refund yet.",
+    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, it has not settled the capture or refund yet, or the customer has not approved the order yet so there is nothing to capture.",
   );
 
 export type ProviderErrorCode = z.infer<typeof providerErrorCodeSchema>;
@@ -297,6 +298,7 @@ const confirmPaymentResult = createResult(
     "provider_not_configured",
     "payment_not_found",
     "payment_pending",
+    "payment_not_approved",
     "payment_replaced",
     "payment_captured_twice",
     "provider_request_failed",
@@ -554,6 +556,8 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
    * Settles a payment once the customer is back from the provider. The order
    * id is what a provider callback carries, so that is what it resolves on. A
    * replayed callback finds the payment already settled and returns it as is.
+   * Before the customer approves, it fails with `payment_not_approved` and
+   * records nothing, so checking early never spoils the order.
    *
    * An order no payment points at any more (the customer opened a newer one,
    * or an earlier order's late capture paid the rental) is never captured, so
@@ -597,11 +601,24 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
 
     const captured = await adapter.captureOrder({ externalOrderId: row.externalOrderId });
     if (!captured.success) {
-      // Held money is not a provider fault: the payment stays pending and a
-      // later confirm settles it.
-      return captured.error.code === "payment_pending"
-        ? err("payment_pending", `Payment ${row.id} is on hold at the provider`, captured.error)
-        : err("provider_request_failed", "The payment provider failed", captured.error);
+      // Held money and a missing approval are not provider faults: the payment
+      // stays pending and a later confirm settles it.
+      switch (captured.error.code) {
+        case "payment_pending":
+          return err(
+            "payment_pending",
+            `Payment ${row.id} is on hold at the provider`,
+            captured.error,
+          );
+        case "order_not_approved":
+          return err(
+            "payment_not_approved",
+            "The customer has not approved the payment at the provider yet",
+            captured.error,
+          );
+        default:
+          return err("provider_request_failed", "The payment provider failed", captured.error);
+      }
     }
 
     return settle(adapter, row, captured.data);

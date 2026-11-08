@@ -12,7 +12,10 @@ type Input = z.infer<typeof inputSchema>;
 
 const outputSchema = z.object({ payment: customerPaymentSchema });
 
-type Output = z.infer<typeof outputSchema>;
+/** The structured content confirm_payment returns, which the PayPal checkout widget reads. */
+export type ConfirmPaymentOutput = z.infer<typeof outputSchema>;
+
+type Output = ConfirmPaymentOutput;
 
 const toOutput = (payment: Payment): Output => ({ payment: toCustomerPayment(payment) });
 
@@ -43,7 +46,7 @@ export const confirmPayment: Tool = (server, context) => {
     {
       title: "Confirm payment",
       description:
-        "Take the payment for one of the user's rentals by its number, e.g. AR-2026-7KQ4M2, once the customer says they approved it at the start_payment link. status succeeded means paid: the rental is confirmed and weekly billing has started. status failed carries failureReason; call start_payment for a fresh link. Only call after the customer approved, since confirming earlier records the payment as failed. Calling again returns the same outcome without charging twice.",
+        "Take the payment for one of the user's rentals by its number, e.g. AR-2026-7KQ4M2, once the customer says they approved it at the start_payment link. status succeeded means paid: the rental is confirmed and weekly billing has started. status failed carries failureReason; call start_payment for a fresh link. Before the customer approves, it fails saying the payment is not approved yet and records nothing, so ask them to approve at the link and call again. Calling again returns the same outcome without charging twice.",
       inputSchema,
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },

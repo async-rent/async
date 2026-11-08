@@ -8,7 +8,7 @@ import {
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { type Sample, sampleLocations, setupPickerSamples } from "./samples";
+import { type Sample, sampleLocations, widgetSamples } from "./samples";
 
 type Theme = "light" | "dark";
 
@@ -24,30 +24,59 @@ const hostStyles: McpUiHostContext["styles"] = {
   variables: { "--font-sans": 'Georgia, "Times New Roman", serif' } as McpUiStyles,
 };
 
+const firstKey = (record: Record<string, unknown>) => Object.keys(record)[0] ?? "";
+
 /**
  * A fake MCP Apps host for building widgets in a normal browser tab. It loads the
  * widget page in an iframe, talks to it over the real ext-apps AppBridge, sends a
- * sample tool input and result, answers list_locations, and logs what the widget
- * sends back. Open /dev/ under `vp run dev:widgets`.
+ * sample tool input and result, answers list_locations and the sample's
+ * confirm_payment, and logs what the widget sends back. Open /dev/ under
+ * `vp run dev:widgets`.
  */
 function DevHost() {
-  const [sampleKey, setSampleKey] = useState(Object.keys(setupPickerSamples)[0] ?? "");
+  const [widgetKey, setWidgetKey] = useState(firstKey(widgetSamples));
+  const widget = widgetSamples[widgetKey];
+  const samples = widget?.samples ?? {};
+  const [sampleKey, setSampleKey] = useState(firstKey(samples));
   const [theme, setTheme] = useState<Theme>("light");
   const [log, setLog] = useState<LogEntry[]>([]);
-  const sample = setupPickerSamples[sampleKey];
+  const sample = samples[sampleKey];
+
+  function pickWidget(key: string) {
+    setWidgetKey(key);
+    setSampleKey(firstKey(widgetSamples[key]?.samples ?? {}));
+    setLog([]);
+  }
 
   return (
     <div className="flex min-h-screen flex-col gap-4 bg-muted p-6 text-foreground">
       <header className="flex flex-wrap items-center gap-4 text-sm">
-        <h1 className="font-medium">Widget dev host · Setup picker</h1>
+        <h1 className="font-medium">Widget dev host</h1>
+        <label className="flex items-center gap-2">
+          Widget
+          <select
+            className="rounded-md border bg-background px-2 py-1"
+            value={widgetKey}
+            onChange={(event) => pickWidget(event.target.value)}
+          >
+            {Object.entries(widgetSamples).map(([key, { label }]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex items-center gap-2">
           Sample
           <select
             className="rounded-md border bg-background px-2 py-1"
             value={sampleKey}
-            onChange={(event) => setSampleKey(event.target.value)}
+            onChange={(event) => {
+              setSampleKey(event.target.value);
+              setLog([]);
+            }}
           >
-            {Object.entries(setupPickerSamples).map(([key, { label }]) => (
+            {Object.entries(samples).map(([key, { label }]) => (
               <option key={key} value={key}>
                 {label}
               </option>
@@ -67,12 +96,14 @@ function DevHost() {
         </label>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,42rem)_1fr]">
-        {sample && (
+      {/* A fixed widget column, so a long log entry never squeezes the widget. */}
+      <div className="grid gap-4 lg:grid-cols-[42rem_minmax(0,1fr)]">
+        {widget && sample && (
           // A fresh iframe per sample, as a host renders a fresh widget per tool call.
           <WidgetFrame
-            key={sampleKey}
-            src="/setup-picker/"
+            key={`${widgetKey}/${sampleKey}`}
+            src={widget.src}
+            title={widget.label}
             sample={sample}
             theme={theme}
             onLog={(kind, text) =>
@@ -99,12 +130,13 @@ function DevHost() {
 
 interface WidgetFrameProps {
   src: string;
+  title: string;
   sample: Sample;
   theme: Theme;
   onLog: (kind: string, text: string) => void;
 }
 
-function WidgetFrame({ src, sample, theme, onLog }: WidgetFrameProps) {
+function WidgetFrame({ src, title, sample, theme, onLog }: WidgetFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bridgeRef = useRef<AppBridge | null>(null);
   const [height, setHeight] = useState(320);
@@ -130,6 +162,8 @@ function WidgetFrame({ src, sample, theme, onLog }: WidgetFrameProps) {
       },
     );
     bridgeRef.current = bridge;
+    // How many times this frame has called confirm_payment.
+    let confirmCalls = 0;
 
     bridge.oninitialized = () => {
       const { sample: current } = latest.current;
@@ -144,6 +178,16 @@ function WidgetFrame({ src, sample, theme, onLog }: WidgetFrameProps) {
           structuredContent: output,
           content: [{ type: "text", text: JSON.stringify(output) }],
         };
+      }
+      const answers = latest.current.sample.confirmPayment;
+      if (name === "confirm_payment" && answers) {
+        const answer = answers[Math.min(confirmCalls, answers.length - 1)];
+        confirmCalls += 1;
+        if (answer) {
+          const text = answer.content.find((block) => block.type === "text");
+          latest.current.onLog(`confirm_payment answered (call ${confirmCalls})`, text?.text ?? "");
+          return answer;
+        }
       }
       return { isError: true, content: [{ type: "text", text: `The dev host has no ${name}.` }] };
     };
@@ -181,7 +225,7 @@ function WidgetFrame({ src, sample, theme, onLog }: WidgetFrameProps) {
     <iframe
       ref={iframeRef}
       src={src}
-      title="Setup picker"
+      title={title}
       // Real hosts serve widgets from a separate origin with a CSP; this only blocks
       // popups and top navigation. Same origin lets the dev server's module scripts load.
       sandbox="allow-scripts allow-same-origin"
