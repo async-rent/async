@@ -113,8 +113,6 @@ function toOpenOrder(rental: Rental): OpenOrder {
 
 // The PayPal adapter's decline reasons speak of "the customer"; the shopper reads them as "you".
 const declineReasons: Partial<Record<string, string>> = {
-  "The customer has not approved the payment at PayPal.":
-    "PayPal didn't get your approval for this payment.",
   "PayPal needs the customer to approve the payment again.":
     "PayPal needs you to approve the payment again.",
   "The customer cannot pay for this order with PayPal.":
@@ -362,7 +360,11 @@ export const confirmRentalPayment = createServerFn({ method: "POST" })
     });
     if (!confirmed.success) {
       if (confirmed.error.code === "payment_pending") return { outcome: "processing", number };
-      if (confirmed.error.code === "payment_replaced") {
+      // Neither took money, so the order is still there to pay.
+      if (
+        confirmed.error.code === "payment_replaced" ||
+        confirmed.error.code === "payment_not_approved"
+      ) {
         return { outcome: "unfinished", order: toOpenOrder(rental) };
       }
     }

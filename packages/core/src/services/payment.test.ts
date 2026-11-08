@@ -421,6 +421,25 @@ describe("confirmPayment", () => {
     expect(s.rentalRow("rental_1")).toEqual({ status: "pending_payment", paymentStatus: null });
   });
 
+  it("leaves the payment pending when the customer has not approved yet, then takes it once they have", async () => {
+    const s = setup();
+    const externalOrderId = await start(s);
+    s.captureOrder.mockResolvedValueOnce(
+      captureProviderOrderResult.err("order_not_approved", "order not approved"),
+    );
+
+    const early = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(early).toMatchObject({ success: false, error: { code: "payment_not_approved" } });
+    expect(s.paymentRow()).toEqual({ externalOrderId, status: "pending" });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "pending_payment", paymentStatus: null });
+
+    const approved = await s.service.confirmPayment({ provider: "paypal", externalOrderId });
+
+    expect(approved).toMatchObject({ success: true, data: { status: "succeeded" } });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
   it("returns the settled payment on a replayed callback without capturing again", async () => {
     const s = setup();
     const externalOrderId = await start(s);

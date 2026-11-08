@@ -77,7 +77,6 @@ const declineReasons = new Map<string, string>([
   ["INSTRUMENT_DECLINED", "The payment method was declined. Try another one."],
   ["REDIRECT_PAYER_FOR_ALTERNATE_FUNDING", "The payment method was declined. Try another one."],
   ["PAYER_ACTION_REQUIRED", "PayPal needs the customer to approve the payment again."],
-  ["ORDER_NOT_APPROVED", "The customer has not approved the payment at PayPal."],
   ["PAYER_CANNOT_PAY", "The customer cannot pay for this order with PayPal."],
   ["PAYER_ACCOUNT_RESTRICTED", "The customer's PayPal account is restricted."],
   ["PAYER_ACCOUNT_LOCKED_OR_CLOSED", "The customer's PayPal account is locked or closed."],
@@ -347,6 +346,16 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
       }
 
       return ok(order.data);
+    }
+
+    // Nothing to capture yet. PayPal answers a retry with the same request id
+    // afresh, so the same order can be captured once the customer approves it.
+    if (captureRefused && reply.failure.issue === "ORDER_NOT_APPROVED") {
+      return err(
+        "order_not_approved",
+        `The customer has not approved PayPal order ${externalOrderId} yet`,
+        reply.failure,
+      );
     }
 
     // Only the capture itself can decline; a failed sign-in is never the customer's to fix.
