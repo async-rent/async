@@ -9,6 +9,8 @@ export interface ToolContext {
   userId: string;
   /** This Worker's pages the payment provider sends the customer back to. */
   paymentReturnUrls: PaymentReturnUrls;
+  /** Origin of this environment's storefront; product image paths resolve against it. */
+  storefrontUrl: string;
 }
 
 /** Registers one tool on a fresh per-request server. */

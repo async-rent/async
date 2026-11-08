@@ -1,10 +1,12 @@
-import type { Product, ProductPage, ProductPrice } from "@async-rent/core";
+import type { Category, Product, ProductPage, ProductPrice } from "@async-rent/core";
 import {
+  isSetup,
   paginationSchema,
   priceForLocation,
   productPriceSchema,
   productSchema,
   searchProductsInputSchema,
+  setupParts,
 } from "@async-rent/core";
 import { z } from "zod";
 import type { Tool } from "../shared/tools";
@@ -22,11 +24,30 @@ const productSummarySchema = productSchema
       .describe(
         "Weekly price per location; only the searched location's when locationId is given.",
       ),
+    image: z
+      .object({
+        url: z.url().describe("Absolute URL of the photo."),
+        alt: z.string().describe("Alternative text describing the photo."),
+      })
+      .optional()
+      .describe("The product's cover photo."),
+    parts: z
+      .array(z.string())
+      .optional()
+      .describe("Set only for a Setup: the product names of the gear it includes."),
   });
 
 const outputSchema = paginationSchema(productSummarySchema);
 
 type Output = z.infer<typeof outputSchema>;
+type ProductSummary = Output["items"][number];
+
+interface CardContext {
+  locationId: string | undefined;
+  /** Every category, so a card can tell whether its product is a Setup. */
+  categories: Category[];
+  storefrontUrl: string;
+}
 
 // Search only returns products rented in the given location, so a price is always found there.
 function pricesIn(product: Product, locationId: string | undefined): ProductPrice[] {
@@ -38,8 +59,16 @@ function pricesIn(product: Product, locationId: string | undefined): ProductPric
   return [price];
 }
 
+// Image paths are relative to the storefront that serves them; absolute URLs pass through.
+function coverImage(product: Product, storefrontUrl: string): ProductSummary["image"] {
+  const [cover] = product.images;
+  if (!cover) return undefined;
+
+  return { url: new URL(cover.url, storefrontUrl).href, alt: cover.alt ?? product.name };
+}
+
 const toOutput =
-  (locationId: string | undefined) =>
+  ({ locationId, categories, storefrontUrl }: CardContext) =>
   (page: ProductPage): Output => ({
     ...page,
     items: page.items.map((product) => ({
@@ -50,10 +79,12 @@ const toOutput =
       categoryId: product.categoryId,
       badge: product.badge,
       prices: pricesIn(product, locationId),
+      image: coverImage(product, storefrontUrl),
+      parts: isSetup(product, categories) ? setupParts(product) : undefined,
     })),
   });
 
-export const searchProducts: Tool = (server, { async }) => {
+export const searchProducts: Tool = (server, { async, storefrontUrl }) => {
   server.registerTool(
     "search_products",
     {
@@ -64,7 +95,21 @@ export const searchProducts: Tool = (server, { async }) => {
       outputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (input) =>
-      toToolResult(await async.catalog.searchProducts(input), toOutput(input.locationId)),
+    async (input) => {
+      const [found, listed] = await Promise.all([
+        async.catalog.searchProducts(input),
+        async.catalog.listCategories(),
+      ]);
+
+      // Parts only enrich the cards, so a failed category read leaves them out
+      // instead of failing the search.
+      if (!listed.success) console.error(listed.error);
+      const categories = listed.success ? listed.data : [];
+
+      return toToolResult(
+        found,
+        toOutput({ locationId: input.locationId, categories, storefrontUrl }),
+      );
+    },
   );
 };

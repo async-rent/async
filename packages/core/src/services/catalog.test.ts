@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createTestDatabase, type TestDatabase } from "../../tests/database";
-import { createCatalogService, type ProductQuery } from "./catalog";
+import { makeCategory, makeProduct } from "../../tests/factories";
+import { createCatalogService, isSetup, setupParts, type ProductQuery } from "./catalog";
 
 /** A fixed timestamp, so `createdAt` assertions never depend on the clock. */
 const createdAt = Date.UTC(2026, 0, 1);
@@ -763,5 +764,51 @@ describe("listCategories", () => {
       success: false,
       error: { code: "failed_to_list_categories", message: "Failed to list categories" },
     });
+  });
+});
+
+describe("isSetup", () => {
+  const categories = [
+    makeCategory({ id: "cat_setups", slug: "setups", name: "Setups" }),
+    makeCategory({ id: "cat_desks", slug: "desks", name: "Desks", sortOrder: 1 }),
+  ];
+
+  it("is true for a product in the Setups category", () => {
+    expect(isSetup(makeProduct({ categoryId: "cat_setups" }), categories)).toBe(true);
+  });
+
+  it("is false for a product in another category", () => {
+    expect(isSetup(makeProduct({ categoryId: "cat_desks" }), categories)).toBe(false);
+  });
+
+  it("is false when the catalog has no Setups category", () => {
+    expect(isSetup(makeProduct({ categoryId: "cat_setups" }), categories.slice(1))).toBe(false);
+  });
+});
+
+describe("setupParts", () => {
+  it("reads the product names from the Includes spec, trimmed, dropping empty entries", () => {
+    const setup = makeProduct({
+      categoryId: "cat_setups",
+      specs: [
+        { label: "Delivery", value: "Assembled on site" },
+        { label: "Includes", value: ' SmartDesk Pro,Ergonomic Task Chair , , UltraSharp 27" 4K,' },
+      ],
+    });
+
+    expect(setupParts(setup)).toEqual([
+      "SmartDesk Pro",
+      "Ergonomic Task Chair",
+      'UltraSharp 27" 4K',
+    ]);
+  });
+
+  it("is empty for a Setup without the Includes spec", () => {
+    const setup = makeProduct({
+      categoryId: "cat_setups",
+      specs: [{ label: "Delivery", value: "Assembled on site" }],
+    });
+
+    expect(setupParts(setup)).toEqual([]);
   });
 });

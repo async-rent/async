@@ -1,5 +1,8 @@
 import {
+  isSetup,
   priceForLocation,
+  setupParts,
+  setupsCategorySlug,
   type Category,
   type Image,
   type Location,
@@ -7,12 +10,6 @@ import {
 } from "@async-rent/core";
 
 import { productSummary } from "./equipment";
-
-/** The category the ready-made setups live in; the bundles section shows it apart. */
-export const setupsCategorySlug = "setups";
-
-/** The spec on a setup that lists its parts, comma-separated by product name. */
-const setupPartsSpecLabel = "Includes";
 
 export interface CategoryTile {
   id: string;
@@ -66,10 +63,9 @@ export function buildCatalogOverview(input: BuildCatalogOverviewInput): CatalogO
     return price ? [{ product, weeklyPrice: price.weeklyPrice }] : [];
   });
 
-  const setups = categories.find((category) => category.slug === setupsCategorySlug);
-
+  // The bundles section sells the Setups, so they get no tile of their own.
   const tiles = categories
-    .filter((category) => category.id !== setups?.id)
+    .filter((category) => category.slug !== setupsCategorySlug)
     .map((category): CategoryTile => {
       const inCategory = priced.filter(({ product }) => product.categoryId === category.id);
 
@@ -87,7 +83,7 @@ export function buildCatalogOverview(input: BuildCatalogOverviewInput): CatalogO
   );
 
   const bundles = priced
-    .filter(({ product }) => setups && product.categoryId === setups.id)
+    .filter(({ product }) => isSetup(product, categories))
     .map(({ product, weeklyPrice }): Bundle => {
       const parts = setupParts(product);
       const partPrices = parts.map((name) => weeklyPriceByName.get(name));
@@ -117,14 +113,4 @@ export function buildCatalogOverview(input: BuildCatalogOverviewInput): CatalogO
       priced.map(({ product }) => [product.id, productSummary(product)]),
     ),
   };
-}
-
-function setupParts(product: Product): string[] {
-  const spec = product.specs.find((candidate) => candidate.label === setupPartsSpecLabel);
-  if (!spec) return [];
-
-  return spec.value
-    .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0);
 }

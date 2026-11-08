@@ -7,6 +7,10 @@
   "observability": {
     "enabled": true,
   },
+  // The storefront this deployment's product image paths resolve against, so
+  // tool results can link absolute image URLs. Vars are not inherited, so each
+  // environment sets its own.
+  "vars": { "STOREFRONT_URL": "https://async-rent-storefront.luckzivanius.workers.dev" },
   // Same database as the root wrangler.jsonc, which applies its migrations.
   "d1_databases": [
     {
@@ -28,6 +32,7 @@
   "env": {
     "dev": {
       "name": "async-rent-mcp-dev",
+      "vars": { "STOREFRONT_URL": "https://async-rent-storefront-dev.luckzivanius.workers.dev" },
       "d1_databases": [
         {
           "binding": "DATABASE",
@@ -46,6 +51,9 @@
     },
     "staging": {
       "name": "async-rent-mcp-staging",
+      "vars": {
+        "STOREFRONT_URL": "https://async-rent-storefront-staging.luckzivanius.workers.dev",
+      },
       "d1_databases": [
         {
           "binding": "DATABASE",
