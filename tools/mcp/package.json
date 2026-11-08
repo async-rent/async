@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
+    "dev:widgets": "vp dev --config vite.widgets.config.ts",
     "build": "vp build",
     "preview": "vp preview",
     "typegen": "wrangler types --env-interface CloudflareBindings"
@@ -12,18 +13,30 @@
   "dependencies": {
     "@async-rent/core": "workspace:*",
     "@async-rent/payment": "workspace:*",
+    "@async-rent/ui": "workspace:*",
     "@clerk/hono": "catalog:",
     "@clerk/mcp-tools": "catalog:",
+    "@modelcontextprotocol/ext-apps": "catalog:",
     "@modelcontextprotocol/sdk": "catalog:",
+    "@remixicon/react": "catalog:",
+    "cn": "catalog:",
     "drizzle-orm": "catalog:",
     "hono": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:",
+    "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "tailwindcss": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
+    "vite-plugin-singlefile": "catalog:",
     "vite-plus": "catalog:",
     "wrangler": "catalog:"
   }

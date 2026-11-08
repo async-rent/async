@@ -6,9 +6,10 @@ import { toToolResult } from "../shared/tools";
 
 const outputSchema = z.object({ locations: z.array(locationSchema) });
 
-type Output = z.infer<typeof outputSchema>;
+/** The structured content list_locations returns; widgets read currencies from it. */
+export type ListLocationsOutput = z.infer<typeof outputSchema>;
 
-const toOutput = (locations: Location[]): Output => ({ locations });
+const toOutput = (locations: Location[]): ListLocationsOutput => ({ locations });
 
 export const listLocations: Tool = (server, { async }) => {
   server.registerTool(
