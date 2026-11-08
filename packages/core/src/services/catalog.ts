@@ -168,7 +168,7 @@ export function isProductRentable(input: IsProductRentableInput): boolean {
 export const setupsCategorySlug = "setups";
 
 /** The spec on a Setup that lists its parts, comma-separated by product name. */
-export const setupPartsSpecLabel = "Includes";
+const setupPartsSpecLabel = "Includes";
 
 /**
  * Whether a product is a Setup: it belongs to the Setups category among

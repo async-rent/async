@@ -42,7 +42,7 @@ const outputSchema = paginationSchema(productSummarySchema);
 type Output = z.infer<typeof outputSchema>;
 type ProductSummary = Output["items"][number];
 
-interface CardContext {
+interface ProductSummaryContext {
   locationId: string | undefined;
   /** Every category, so a card can tell whether its product is a Setup. */
   categories: Category[];
@@ -68,7 +68,7 @@ function coverImage(product: Product, storefrontUrl: string): ProductSummary["im
 }
 
 const toOutput =
-  ({ locationId, categories, storefrontUrl }: CardContext) =>
+  ({ locationId, categories, storefrontUrl }: ProductSummaryContext) =>
   (page: ProductPage): Output => ({
     ...page,
     items: page.items.map((product) => ({
