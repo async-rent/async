@@ -7,6 +7,7 @@ import type { App } from "@modelcontextprotocol/ext-apps/react";
 import { RiCheckLine } from "@remixicon/react";
 import { cn } from "cn";
 import { useEffect, useState } from "react";
+import type { ListLocationsOutput } from "../../tools/list-locations";
 import type { ProductSummary, SearchProductsOutput } from "../../tools/search-products";
 import { formatMoney } from "../shared/money";
 import { errorMessage, structuredResult, useHostedWidget } from "../shared/use-hosted-widget";
@@ -264,7 +265,7 @@ function useLocations(app: App | null): Map<string, Location> | undefined {
     const load = async () => {
       try {
         const result = await app.callServerTool({ name: "list_locations", arguments: {} });
-        const listed = structuredResult<{ locations: Location[] }>(result)?.locations ?? [];
+        const listed = structuredResult<ListLocationsOutput>(result)?.locations ?? [];
         if (current) setLocations(new Map(listed.map((location) => [location.id, location])));
       } catch {
         if (current) setLocations(new Map());

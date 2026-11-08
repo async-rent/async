@@ -6,9 +6,9 @@ import { viteSingleFile } from "vite-plugin-singlefile";
 import { build, defineConfig, type Plugin } from "vite-plus";
 
 /** One folder per widget under src/widgets, each with an index.html entry. */
-export const widgetNames = ["setup-picker"] as const;
+const widgetNames = ["setup-picker"] as const;
 
-export type WidgetName = (typeof widgetNames)[number];
+type WidgetName = (typeof widgetNames)[number];
 
 const widgetsRoot = fileURLToPath(new URL("./src/widgets", import.meta.url));
 
