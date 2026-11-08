@@ -23,12 +23,19 @@ export type ToolOutput = Record<string, unknown>;
 export type CoreResult<TData> = OkWith<TData> | Err<string>;
 
 /**
+ * `_meta` key of a failed tool result's core error code, for widgets that act on
+ * a specific failure. Structured content can't carry it: clients check that
+ * against the tool's `outputSchema` even on errors.
+ */
+export const errorCodeMetaKey = "rent.async/errorCode";
+
+/**
  * Core result → MCP tool result.
  *
  * Success maps the data through `toOutput` into the tool's `outputSchema` shape and
  * returns it as structured content, plus the same JSON as text for clients that
- * only read text. Failure returns only the user-safe message as `isError`; the
- * full error and its cause are logged.
+ * only read text. Failure returns the user-safe message as `isError`, with the
+ * error code under `_meta`; the full error and its cause are logged.
  */
 export function toToolResult<TData, TOutput extends ToolOutput>(
   result: CoreResult<TData>,
@@ -36,7 +43,11 @@ export function toToolResult<TData, TOutput extends ToolOutput>(
 ): CallToolResult {
   if (!result.success) {
     console.error(result.error);
-    return { isError: true, content: [{ type: "text", text: result.error.message }] };
+    return {
+      isError: true,
+      content: [{ type: "text", text: result.error.message }],
+      _meta: { [errorCodeMetaKey]: result.error.code },
+    };
   }
 
   const output = toOutput(result.data);

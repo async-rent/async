@@ -1,6 +1,10 @@
 import type { Location } from "@async-rent/core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CustomerPayment } from "../../shared/payments";
+import { errorCodeMetaKey } from "../../shared/tools";
+import type { ConfirmPaymentOutput } from "../../tools/confirm-payment";
 import type { ProductSummary, SearchProductsOutput } from "../../tools/search-products";
+import type { StartPaymentOutput } from "../../tools/start-payment";
 
 // Seed data, so the cards look like the dev environment's.
 const storefrontUrl = "https://async-rent-storefront-dev.luckzivanius.workers.dev";
@@ -77,15 +81,29 @@ const ultrawide: Card = {
   image: photo("missing.jpg", 'UltraWide 34" curved display'),
 };
 
-const result = (output: SearchProductsOutput): CallToolResult => ({
+const result = (
+  output: SearchProductsOutput | StartPaymentOutput | ConfirmPaymentOutput,
+): CallToolResult => ({
   structuredContent: output,
   content: [{ type: "text", text: JSON.stringify(output) }],
+});
+
+// What toToolResult returns for a failed core call.
+const toolError = (code: string, message: string): CallToolResult => ({
+  isError: true,
+  content: [{ type: "text", text: message }],
+  _meta: { [errorCodeMetaKey]: code },
 });
 
 export interface Sample {
   label: string;
   input: Record<string, unknown>;
   result: CallToolResult;
+  /**
+   * What confirm_payment answers, one per call in order; the last one repeats.
+   * Without it the dev host has no confirm_payment.
+   */
+  confirmPayment?: CallToolResult[];
 }
 
 /** search_products results the dev page feeds the Setup picker. */
@@ -164,3 +182,106 @@ export const sampleLocations: Location[] = [
     status: "active",
   },
 ];
+
+// The rental from the dev seed's checkout: first week, deposit and delivery.
+const pendingPayment: CustomerPayment = {
+  id: "pay_1",
+  rentalId: "rental_1",
+  billingCycle: 1,
+  provider: "paypal",
+  amount: 37000,
+  currency: "USD",
+  status: "pending",
+  createdAt: "2026-11-08T05:00:00.000Z",
+};
+
+const paidPayment: CustomerPayment = {
+  ...pendingPayment,
+  status: "succeeded",
+  paidAt: "2026-11-08T05:02:00.000Z",
+  updatedAt: "2026-11-08T05:02:00.000Z",
+};
+
+const declinedPayment: CustomerPayment = {
+  ...pendingPayment,
+  status: "failed",
+  failureReason: "The payment method was declined. Try another one.",
+  updatedAt: "2026-11-08T05:02:00.000Z",
+};
+
+const checkoutInput = { number: "AR-2026-7KQ4M2", provider: "paypal" };
+
+const awaitingApproval = result({
+  status: "awaiting_approval",
+  payment: pendingPayment,
+  approvalUrl: "https://www.sandbox.paypal.com/checkoutnow?token=5O190127TN364715T",
+});
+
+const notApproved = toolError(
+  "payment_not_approved",
+  "Payment pay_1 is not approved at the provider yet",
+);
+
+/**
+ * start_payment results the dev page feeds the PayPal checkout, with what
+ * confirm_payment answers its checks. The checkout checks every few seconds once
+ * Pay with PayPal is pressed, and at once on I've approved.
+ */
+export const paypalCheckoutSamples: Record<string, Sample> = {
+  approvesSoon: {
+    label: "Approves on the third check",
+    input: checkoutInput,
+    result: awaitingApproval,
+    confirmPayment: [notApproved, notApproved, result({ payment: paidPayment })],
+  },
+  neverApproves: {
+    label: "Not approved yet",
+    input: checkoutInput,
+    result: awaitingApproval,
+    confirmPayment: [notApproved],
+  },
+  declined: {
+    label: "Declined",
+    input: checkoutInput,
+    result: awaitingApproval,
+    confirmPayment: [result({ payment: declinedPayment })],
+  },
+  confirmError: {
+    label: "Confirm fails",
+    input: checkoutInput,
+    result: awaitingApproval,
+    confirmPayment: [
+      toolError(
+        "payment_captured_twice",
+        "PayPal charged this order twice. Email hello@async.rent and we'll refund the extra payment.",
+      ),
+    ],
+  },
+  alreadyPaid: {
+    label: "Already paid",
+    input: checkoutInput,
+    result: result({ status: "paid", payment: paidPayment }),
+  },
+  startError: {
+    label: "Start fails",
+    input: { number: "AR-2026-NOPE00", provider: "paypal" },
+    result: toolError("rental_not_found", "Rental AR-2026-NOPE00 not found."),
+  },
+};
+
+export interface WidgetSamples {
+  label: string;
+  /** The widget's page under the dev server. */
+  src: string;
+  samples: Record<string, Sample>;
+}
+
+/** Every widget the dev page can show, with its samples. */
+export const widgetSamples: Record<string, WidgetSamples> = {
+  setupPicker: { label: "Setup picker", src: "/setup-picker/", samples: setupPickerSamples },
+  paypalCheckout: {
+    label: "PayPal checkout",
+    src: "/paypal-checkout/",
+    samples: paypalCheckoutSamples,
+  },
+};

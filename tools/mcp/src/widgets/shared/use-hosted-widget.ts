@@ -6,11 +6,14 @@ import {
 } from "@modelcontextprotocol/ext-apps/react";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { useEffect, useState } from "react";
+import { errorCodeMetaKey } from "../../shared/tools";
 
 export interface HostedWidget {
   /** Set once the widget has connected to its host. */
   app: App | null;
   error: Error | null;
+  /** The arguments of the tool call this widget is attached to, once the host sends them. */
+  toolInput: Record<string, unknown> | undefined;
   /** The result of the tool call this widget is attached to, once the host sends it. */
   toolResult: CallToolResult | undefined;
 }
@@ -21,13 +24,15 @@ export interface HostedWidget {
  * because their names differ from the `@async-rent/ui` theme's.
  */
 export function useHostedWidget(name: string): HostedWidget {
+  const [toolInput, setToolInput] = useState<Record<string, unknown>>();
   const [toolResult, setToolResult] = useState<CallToolResult>();
   const { app, error } = useApp({
     appInfo: { name, version: "0.1.0" },
     capabilities: {},
     autoResize: true,
-    // Handlers must be set before the app connects, or the first result is missed.
+    // Handlers must be set before the app connects, or the first input and result are missed.
     onAppCreated: (created) => {
+      created.ontoolinput = ({ arguments: args }) => setToolInput(args ?? {});
       created.ontoolresult = setToolResult;
     },
   });
@@ -40,7 +45,7 @@ export function useHostedWidget(name: string): HostedWidget {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  return { app, error, toolResult };
+  return { app, error, toolInput, toolResult };
 }
 
 /**
@@ -67,4 +72,12 @@ export function errorMessage(result: CallToolResult): string | undefined {
 
   const text = result.content.find((block) => block.type === "text");
   return text?.text ?? "Something went wrong.";
+}
+
+/** The core error code of a failed tool result, when the host passed its `_meta` on. */
+export function errorCode(result: CallToolResult): string | undefined {
+  if (!result.isError) return undefined;
+
+  const code = result._meta?.[errorCodeMetaKey];
+  return typeof code === "string" ? code : undefined;
 }
