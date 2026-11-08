@@ -49,6 +49,7 @@ app.all("/mcp", clerkMiddleware(), mcpAuthClerk, async (c) => {
     async: composeAsync(c.env),
     userId: auth.userId,
     paymentReturnUrls: paymentReturnUrls(new URL(c.req.url).origin),
+    storefrontUrl: c.env.STOREFRONT_URL,
   };
 
   return streamableHttpHandler(() => createMcpServer(context))(c);

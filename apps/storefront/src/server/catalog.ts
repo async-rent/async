@@ -1,8 +1,8 @@
-import type { Product } from "@async-rent/core";
+import { setupsCategorySlug, type Product } from "@async-rent/core";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-import { buildCatalogOverview, setupsCategorySlug } from "../lib/catalog-overview";
+import { buildCatalogOverview } from "../lib/catalog-overview";
 import {
   defaultEquipmentSort,
   equipmentFiltersSchema,

@@ -164,6 +164,39 @@ export function isProductRentable(input: IsProductRentableInput): boolean {
   return priceForLocation(product, locationId) !== undefined;
 }
 
+/** Slug of the category Setups live in: ready-made sets of gear rented as one product. */
+export const setupsCategorySlug = "setups";
+
+/** The spec on a Setup that lists its parts, comma-separated by product name. */
+const setupPartsSpecLabel = "Includes";
+
+/**
+ * Whether a product is a Setup: it belongs to the Setups category among
+ * `categories`. Pure; false when the catalog has no Setups category.
+ */
+export function isSetup(
+  product: Pick<Product, "categoryId">,
+  categories: readonly Pick<Category, "id" | "slug">[],
+): boolean {
+  const category = categories.find((candidate) => candidate.id === product.categoryId);
+
+  return category?.slug === setupsCategorySlug;
+}
+
+/**
+ * A Setup's parts: the product names its `Includes` spec lists, trimmed, with
+ * empty entries dropped. Empty when the spec is missing. Pure.
+ */
+export function setupParts(product: Pick<Product, "specs">): string[] {
+  const spec = product.specs.find((candidate) => candidate.label === setupPartsSpecLabel);
+  if (!spec) return [];
+
+  return spec.value
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
+
 const rentedIn = (locationId: string): SQL => sql`exists (
   select 1 from ${productPrices}
   where ${productPrices.productId} = ${products.id}
@@ -484,5 +517,7 @@ export function createCatalogService({ db }: CreateCatalogServiceOptions) {
     isProductRentable,
     isLocationActive,
     priceForLocation,
+    isSetup,
+    setupParts,
   };
 }
