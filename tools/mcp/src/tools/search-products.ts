@@ -8,9 +8,14 @@ import {
   searchProductsInputSchema,
   setupParts,
 } from "@async-rent/core";
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
+import setupPickerHtml from "../../dist/widgets/setup-picker/index.html?raw";
 import type { Tool } from "../shared/tools";
 import { toToolResult } from "../shared/tools";
+import { registerWidget } from "../shared/widgets";
+
+const setupPickerUri = "ui://async/setup-picker.html";
 
 const inputSchema = searchProductsInputSchema;
 
@@ -39,8 +44,9 @@ const productSummarySchema = productSchema
 
 const outputSchema = paginationSchema(productSummarySchema);
 
-type Output = z.infer<typeof outputSchema>;
-type ProductSummary = Output["items"][number];
+/** The structured content search_products returns, which the Setup picker widget renders. */
+export type SearchProductsOutput = z.infer<typeof outputSchema>;
+export type ProductSummary = SearchProductsOutput["items"][number];
 
 interface ProductSummaryContext {
   locationId: string | undefined;
@@ -69,7 +75,7 @@ function coverImage(product: Product, storefrontUrl: string): ProductSummary["im
 
 const toOutput =
   ({ locationId, categories, storefrontUrl }: ProductSummaryContext) =>
-  (page: ProductPage): Output => ({
+  (page: ProductPage): SearchProductsOutput => ({
     ...page,
     items: page.items.map((product) => ({
       id: product.id,
@@ -85,15 +91,25 @@ const toOutput =
   });
 
 export const searchProducts: Tool = (server, { async, storefrontUrl }) => {
-  server.registerTool(
+  registerWidget(server, {
+    name: "Setup picker",
+    uri: setupPickerUri,
+    html: setupPickerHtml,
+    // Card photos are served by the storefront.
+    resourceDomains: [new URL(storefrontUrl).origin],
+  });
+
+  registerAppTool(
+    server,
     "search_products",
     {
       title: "Search products",
       description:
-        "Search the workspace equipment Async rents, filtered by search words, category, location and a weekly price ceiling, then sorted and paged. Prices are integers in the location currency's minor unit, e.g. cents. Returns compact cards; call get_product for a product's full details.",
+        "Search the workspace equipment Async rents, filtered by search words, category, location and a weekly price ceiling, then sorted and paged. Prices are integers in the location currency's minor unit, e.g. cents. Returns compact cards; call get_product for a product's full details. In hosts that support MCP Apps, the results also open an interactive picker where the customer selects one or more cards and presses Rent these, which sends you a message naming each pick and its id; then ask for the rental dates and quote as usual. The picker shows only this page of results, so search again when the customer asks for more or different gear.",
       inputSchema,
       outputSchema,
       annotations: { readOnlyHint: true },
+      _meta: { ui: { resourceUri: setupPickerUri } },
     },
     async (input) => {
       const [found, listed] = await Promise.all([

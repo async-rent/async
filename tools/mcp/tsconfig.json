@@ -1,4 +1,6 @@
 {
+  // The Worker. Widget sources run in the browser and type-check with src/widgets/tsconfig.json.
+  "exclude": ["src/widgets", "dist", "node_modules"],
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
