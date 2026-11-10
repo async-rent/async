@@ -12,6 +12,7 @@
     "check": "vp check"
   },
   "dependencies": {
+    "@async-rent/db": "catalog:",
     "uuid": "catalog:",
     "zod": "catalog:"
   },

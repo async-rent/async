@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Setup Picker</title>
+    <style>
+      :root {
+        --bg-light: #ffffff;
+        --text-light: #1a1a1a;
+        --border-light: #e5e5e5;
+        --primary: #00854b;
+        --primary-hover: #006b3e;
+      }
+      :root.dark {
+        --bg-light: #1e1e1e;
+        --text-light: #f0f0f0;
+        --border-light: #333;
+        --primary: #4ade80;
+        --primary-hover: #22c55e;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        background: var(--bg-light);
+        color: var(--text-light);
+        min-height: 100vh;
+        padding: 16px;
+      }
+      .container {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      .header {
+        margin-bottom: 16px;
+      }
+      h1 {
+        font-size: 20px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .subtitle {
+        font-size: 13px;
+        opacity: 0.7;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .card {
+        border: 1px solid var(--border-light);
+        border-radius: 8px;
+        overflow: hidden;
+        cursor: pointer;
+        transition:
+          border-color 0.2s,
+          transform 0.1s;
+        background: var(--bg-light);
+      }
+      .card:hover {
+        transform: translateY(-2px);
+      }
+      .card.selected {
+        border-color: var(--primary);
+      }
+      .card img {
+        width: 100%;
+        height: 140px;
+        object-fit: cover;
+        display: block;
+        background: #eee;
+      }
+      .card-body {
+        padding: 10px;
+      }
+      .card-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .card-price {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--primary);
+      }
+      .card-parts {
+        font-size: 11px;
+        opacity: 0.8;
+        margin-top: 4px;
+        line-height: 1.3;
+      }
+      .badge {
+        display: inline-block;
+        font-size: 10px;
+        padding: 2px 6px;
+        background: var(--primary);
+        color: #fff;
+        border-radius: 4px;
+        margin-right: 4px;
+      }
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border-light);
+      }
+      .summary {
+        font-size: 13px;
+      }
+      .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        background: var(--primary);
+        color: #fff;
+        transition: background 0.2s;
+      }
+      .btn:hover {
+        background: var(--primary-hover);
+      }
+      .btn:disabled {
+        background: #999;
+        cursor: not-allowed;
+      }
+      .empty-state {
+        text-align: center;
+        padding: 32px;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Pick your setup</h1>
+        <p class="subtitle">
+          Select one or more items. Press <strong>Rent these</strong> when you're done.
+        </p>
+      </div>
+      <div class="grid" id="grid"></div>
+      <div class="footer">
+        <div class="summary"><span id="count">0</span> selected</div>
+        <button class="btn" id="rentBtn" disabled>Rent these</button>
+      </div>
+      <div id="status" class="summary" style="margin-top: 8px"></div>
+    </div>
+    <script>
+      const grid = document.getElementById("grid");
+      const countEl = document.getElementById("count");
+      const rentBtn = document.getElementById("rentBtn");
+      const statusEl = document.getElementById("status");
+
+      let products = [];
+      let selected = new Set();
+
+      // Theme detection
+      try {
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+        if (prefersDark.matches) document.documentElement.classList.add("dark");
+      } catch (e) {}
+
+      function render() {
+        grid.innerHTML = "";
+        if (!products.length) {
+          grid.innerHTML = '<div class="empty-state">No products found.</div>';
+          return;
+        }
+        products.forEach((p) => {
+          const card = document.createElement("div");
+          card.className = "card" + (selected.has(p.id) ? " selected" : "");
+          card.dataset.id = p.id;
+          const price = p.weekly_price != null ? `$${Number(p.weekly_price).toFixed(2)}/week` : "";
+          const isSetup = p.type === "setup" || p.is_setup;
+          const parts =
+            Array.isArray(p.parts) && p.parts.length
+              ? `<div class="card-parts">${p.parts.map((x) => `<span class="badge">${x.name || x}</span>`).join("")}</div>`
+              : "";
+          card.innerHTML = `
+          ${p.image ? `<img src="${p.image}" alt="${p.alt || p.name || ""}" />` : '<div style="height:140px;background:#eee;display:flex;align-items:center;justify-content:center;color:#999">No image</div>'}
+          <div class="card-body">
+            <div class="card-title">${p.name || "Unknown"}</div>
+            <div class="card-price">${price}${isSetup ? " · Setup" : ""}</div>
+            ${parts}
+          </div>
+        `;
+          card.addEventListener("click", () => {
+            if (selected.has(p.id)) selected.delete(p.id);
+            else selected.add(p.id);
+            updateUI();
+          });
+          grid.appendChild(card);
+        });
+        updateUI();
+      }
+
+      function updateUI() {
+        countEl.textContent = String(selected.size);
+        rentBtn.disabled = selected.size === 0;
+      }
+
+      rentBtn.addEventListener("click", async () => {
+        const picked = products.filter((p) => selected.has(p.id));
+        const message = {
+          type: "rent_selected",
+          products: picked.map((p) => ({ id: p.id, name: p.name })),
+        };
+        statusEl.textContent = "Sending picks...";
+        try {
+          // MCP Apps: send message to host
+          if (window.parent) {
+            window.parent.postMessage(
+              { type: "mcp-ext-app:event", event: "sendMessage", data: message },
+              "*",
+            );
+          }
+          statusEl.textContent = "Sent! Ask me about dates and quoting.";
+        } catch (err) {
+          statusEl.textContent = "Could not send selection.";
+          console.error(err);
+        }
+      });
+
+      // Listen for tool output from host
+      window.addEventListener("message", (event) => {
+        const data = event?.data;
+        if (!data || data.type !== "mcp-ext-app:tool-result") return;
+        const result = data.result;
+        if (result && Array.isArray(result.products)) {
+          products = result.products;
+          selected.clear();
+          render();
+        }
+      });
+
+      // Also render if host injects initial data inline
+      try {
+        const initial = window.__INITIAL_DATA__;
+        if (initial && Array.isArray(initial.products)) {
+          products = initial.products;
+          render();
+        }
+      } catch (e) {}
+    </script>
+  </body>
+</html>

@@ -1,3 +1,2 @@
-export function fn() {
-  return "Hello, Vite+!";
-}
+export { Database } from "./db.js";
+export * from "./schema.js";
