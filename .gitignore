@@ -34,3 +34,11 @@ dist-ssr
 !.vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Wrangler state files (build artifacts)
+.wrangler/
+.wrangler/state/
+.wrangler/state/**
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
