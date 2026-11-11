@@ -238,8 +238,10 @@ interface CallOptions {
  * ```
  *
  * Every method returns a result and never throws. Capture and refund send an
- * idempotency key derived from the PayPal id, so a retried confirm or refund
- * replays PayPal's first answer instead of moving money twice. A capture that
+ * idempotency key, so a retried confirm or refund replays PayPal's first
+ * answer instead of moving money twice: a capture's is derived from the
+ * order, and a refund uses the caller's request key or one derived from the
+ * capture (and amount, for a partial refund). A capture that
  * could still change (pending, or taken and so refundable) and a pending
  * refund are read again by their id, so a later call sees where they stand now
  * rather than the replayed answer. A capture retried after PayPal forgot the
@@ -462,16 +464,43 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
     const parsed = refundProviderPaymentInputSchema.safeParse(input);
     if (!parsed.success) return err("invalid_request", "Invalid PayPal refund", parsed.error);
 
-    const { externalPaymentId } = parsed.data;
+    const { externalPaymentId, amount, currency, requestKey } = parsed.data;
 
     // No amount: PayPal then refunds what the capture has left, so a capture
     // already partly refunded at PayPal is still refunded in full here.
+    let body: { amount?: { currency_code: string; value: string } } = {};
+    if (amount !== undefined && currency !== undefined) {
+      const value = toPayPalAmount(amount, currency);
+      if (!value.success) return value;
+
+      body = { amount: value.data };
+    }
+
+    // A partial refund never shares the full refund's default key: PayPal
+    // would replay one for the other instead of moving the money asked for.
+    const defaultKey =
+      amount === undefined
+        ? `refund-${externalPaymentId}`
+        : `refund-${externalPaymentId}-${amount}`;
     const reply = await call(
       `/v2/payments/captures/${encodeURIComponent(externalPaymentId)}/refund`,
-      { body: {}, requestId: `refund-${externalPaymentId}` },
+      { body, requestId: requestKey ?? defaultKey },
     );
-    // Already refunded in full is the state we asked for.
-    if (reply.kind === "refused" && reply.failure.issue === "CAPTURE_FULLY_REFUNDED") return ok();
+    const refused = reply.kind === "refused" && !reply.step ? reply.failure : undefined;
+    if (refused?.issue === "CAPTURE_FULLY_REFUNDED") {
+      // Already refunded in full is the state a full refund asks for. A
+      // partial one asked for money the capture no longer has.
+      return amount === undefined
+        ? ok()
+        : err("refund_exceeds_payment", `PayPal capture ${externalPaymentId} is fully refunded`);
+    }
+    if (refused?.issue === "REFUND_AMOUNT_EXCEEDED") {
+      return err(
+        "refund_exceeds_payment",
+        `PayPal capture ${externalPaymentId} has less left to refund than was asked for`,
+        refused,
+      );
+    }
     if (reply.kind !== "answered") return err(...toReplyError("refund the payment", reply));
 
     const refunded = refundSchema.safeParse(reply.body);
