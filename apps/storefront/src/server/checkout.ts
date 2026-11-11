@@ -25,6 +25,7 @@ import {
   type PaymentReturn,
 } from "../lib/checkout";
 import { earliestDeliveryDate, latestDeliveryDate } from "../lib/rental-plan";
+import { rentalLines } from "../lib/rentals";
 import { getAsync, unwrap } from "./async";
 import { requireUserId } from "./auth";
 import { loadOwnRental } from "./own-rental";
@@ -93,13 +94,7 @@ function toOpenOrder(rental: Rental): OpenOrder {
     deliveryDate: rental.deliveryDate ?? rental.startDate,
     weeks: rentalWeekCount(rental.startDate, rental.endDate),
     currency: rental.currency,
-    lines: rental.items.map((item) => ({
-      productId: item.productId,
-      name: item.name,
-      image: item.image,
-      quantity: item.quantity,
-      weeklyPrice: item.weeklyPrice,
-    })),
+    lines: rentalLines(rental),
     leftOut: 0,
     summary: rental.summary,
     details: {

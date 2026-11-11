@@ -1,9 +1,10 @@
 import type { Payment, RentalStatus } from "@async-rent/core";
 import { Badge } from "@async-rent/ui/components/badge";
+import type { ComponentProps } from "react";
 
 import { paymentStatusLabels, rentalStatusLabels } from "../../lib/rentals";
 
-type BadgeVariant = "default" | "secondary" | "soft" | "destructive" | "outline";
+type BadgeVariant = NonNullable<ComponentProps<typeof Badge>["variant"]>;
 
 const rentalStatusVariants: Record<RentalStatus, BadgeVariant> = {
   pending_payment: "secondary",

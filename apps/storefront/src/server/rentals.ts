@@ -5,6 +5,7 @@ import { rentalWeekCount, supportEmail } from "../lib/checkout";
 import {
   myRentalInputSchema,
   myRentalsInputSchema,
+  myRentalsMaxPage,
   myRentalsPageSize,
   nextChargeDate,
   rentalLines,
@@ -122,7 +123,7 @@ export const listMyRentals = createServerFn({ method: "GET" })
     return {
       items,
       page: data.page,
-      pageCount: Math.max(1, Math.ceil(page.total / myRentalsPageSize)),
+      pageCount: Math.min(myRentalsMaxPage, Math.max(1, Math.ceil(page.total / myRentalsPageSize))),
       total: page.total,
     };
   });

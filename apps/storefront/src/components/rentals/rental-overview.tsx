@@ -53,14 +53,13 @@ function standing(rental: RentalDetail): { title: string; text: string } {
         text: "Nothing has been charged. Pay the first week with PayPal to confirm it and book the delivery.",
       };
     case "confirmed":
-      return rental.delivered
+    case "active":
+      return rental.status === "active" || rental.delivered
         ? { title: "Your gear is set up.", text: `It was delivered to ${address}.` }
         : {
             title: `Arriving ${formatDeliveryDate(rental.deliveryDate)}.`,
             text: `It's paid and confirmed. We'll deliver and set up your gear at ${address}.`,
           };
-    case "active":
-      return { title: "Your gear is set up.", text: `It was delivered to ${address}.` };
     case "completed":
       return {
         title: "This rental is complete.",
