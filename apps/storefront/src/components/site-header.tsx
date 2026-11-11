@@ -1,6 +1,6 @@
 import { Badge } from "@async-rent/ui/components/badge";
 import { Button } from "@async-rent/ui/components/button";
-import { Show, SignInButton, UserButton } from "@clerk/tanstack-react-start";
+import { Show, SignInButton } from "@clerk/tanstack-react-start";
 import { RiShoppingCart2Line, RiUser3Line } from "@remixicon/react";
 import { Link } from "@tanstack/react-router";
 
@@ -10,6 +10,7 @@ import { AudienceSwitch } from "./audience-switch";
 import { useCartDrawer } from "./cart/cart-drawer-context";
 import { CityPicker } from "./city-picker";
 import { Logo } from "./logo";
+import { ProfileMenu } from "./profile-menu";
 
 export function SiteHeader() {
   const { cart } = useCart();
@@ -83,9 +84,7 @@ function AccountEntry() {
         </SignInButton>
       </Show>
       <Show when="signed-in">
-        <div className="flex size-10 items-center justify-center">
-          <UserButton />
-        </div>
+        <ProfileMenu />
       </Show>
     </>
   );
