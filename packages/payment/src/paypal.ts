@@ -466,9 +466,9 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
 
     const { externalPaymentId, amount, currency, requestKey } = parsed.data;
 
-    // No amount: PayPal then refunds what the capture has left, so a capture
-    // already partly refunded at PayPal is still refunded in full here.
     let body: { amount?: { currency_code: string; value: string } } = {};
+    // With no amount, PayPal refunds what the capture has left, so a capture
+    // already partly refunded at PayPal is still refunded in full here.
     if (amount !== undefined && currency !== undefined) {
       const value = toPayPalAmount(amount, currency);
       if (!value.success) return value;
@@ -478,6 +478,8 @@ export function createPayPalAdapter(options: CreatePayPalAdapterOptions): Paymen
 
     // A partial refund never shares the full refund's default key: PayPal
     // would replay one for the other instead of moving the money asked for.
+    // PayPal only replays a key for a limited time (see `captureOrder`), so a
+    // partial refund retried after that is sent, and paid, afresh.
     const defaultKey =
       amount === undefined
         ? `refund-${externalPaymentId}`

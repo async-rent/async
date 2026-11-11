@@ -826,7 +826,7 @@ describe("refundPayment", () => {
 
     const result = await s.service.refundPayment({ paymentId, amount });
 
-    expect(result).toMatchObject({ success: false, error: { code: "invalid_refund_amount" } });
+    expect(result).toMatchObject({ success: false, error: { code: "refund_amount_invalid" } });
     expect(s.refund).not.toHaveBeenCalled();
   });
 

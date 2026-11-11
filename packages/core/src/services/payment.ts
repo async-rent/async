@@ -50,7 +50,7 @@ export const refundProviderPaymentInputSchema = z
       .min(1)
       .optional()
       .describe(
-        "Sending the same key again replays the first refund instead of refunding twice. Without one, a full refund is keyed on the payment and a partial one on the payment and amount.",
+        "Sending the same key again replays the first refund instead of refunding twice, for as long as the provider keeps the key. Without one, the adapter derives a key from the refund itself.",
       ),
   })
   .refine((input) => input.amount === undefined || input.currency !== undefined, {
@@ -207,7 +207,10 @@ export interface PaymentProviderAdapter {
    * refunded at the provider. With one it returns that much, and fails with
    * `refund_exceeds_payment` when the charge has less left. Repeating a call
    * with the same `requestKey` replays the first refund's outcome, so a retry
-   * never refunds twice.
+   * never refunds twice, but only while the provider keeps the key (6 hours at
+   * PayPal). A full refund is safe to repeat at any time, since the provider
+   * refuses to refund a charge with nothing left. A partial one repeated
+   * later is a new refund.
    */
   refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult>;
 
@@ -352,7 +355,7 @@ const refundPaymentResult = createResult(
   z.enum([
     "payment_not_found",
     "payment_not_refundable",
-    "invalid_refund_amount",
+    "refund_amount_invalid",
     "refund_exceeds_payment",
     "refund_pending",
     "provider_not_configured",
@@ -888,14 +891,15 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
    * refunds it. An amount above what the payment took is rejected here, and
    * one above what the provider says it has left (after earlier partial
    * refunds) fails with `refund_exceeds_payment` too. Retrying with the same
-   * `requestKey` replays the provider's first refund, so it never pays twice.
+   * `requestKey` replays the provider's first refund, so it never pays twice
+   * while the provider keeps the key; see `PaymentProviderAdapter.refund`.
    */
   async function refundPayment(input: RefundPaymentInput): Promise<RefundPaymentResult> {
     const { ok, err } = refundPaymentResult;
 
     const { amount, requestKey } = input;
     if (amount !== undefined && !(Number.isSafeInteger(amount) && amount > 0)) {
-      return err("invalid_refund_amount", `Cannot refund ${amount}: give a positive whole amount`);
+      return err("refund_amount_invalid", `Cannot refund ${amount}: give a positive whole amount`);
     }
 
     const rows = await attempt(
