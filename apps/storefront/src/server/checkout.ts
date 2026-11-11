@@ -25,8 +25,10 @@ import {
   type PaymentReturn,
 } from "../lib/checkout";
 import { earliestDeliveryDate, latestDeliveryDate } from "../lib/rental-plan";
-import { getAsync, unwrap, type ErrorMessages } from "./async";
+import { rentalLines } from "../lib/rentals";
+import { getAsync, unwrap } from "./async";
 import { requireUserId } from "./auth";
+import { loadOwnRental } from "./own-rental";
 
 // Core's messages for these name cart, product and location ids.
 const createRentalMessages = {
@@ -92,13 +94,7 @@ function toOpenOrder(rental: Rental): OpenOrder {
     deliveryDate: rental.deliveryDate ?? rental.startDate,
     weeks: rentalWeekCount(rental.startDate, rental.endDate),
     currency: rental.currency,
-    lines: rental.items.map((item) => ({
-      productId: item.productId,
-      name: item.name,
-      image: item.image,
-      quantity: item.quantity,
-      weeklyPrice: item.weeklyPrice,
-    })),
+    lines: rentalLines(rental),
     leftOut: 0,
     summary: rental.summary,
     details: {
@@ -154,18 +150,6 @@ function toPaidOrder(rental: Rental, payment: Payment, now = new Date()): PaidOr
     chargesLeft: billed && order.weeks !== null ? order.weeks - cycle + 1 : null,
   };
 }
-
-// One of the visitor's own orders by its number. Someone else's reads as not
-// found, so a guessed number reveals nothing.
-const loadOwnRental = createServerOnlyFn(
-  async (userId: string, number: string, messages: ErrorMessages): Promise<Rental> => {
-    const rental = unwrap(await getAsync().rental.getRentalByNumber({ number }), messages);
-    if (rental.userId === userId) return rental;
-
-    setResponseStatus(404);
-    throw new Error(messages.rental_not_found ?? loadOrderMessages.rental_not_found);
-  },
-);
 
 // The visitor's newest order still waiting for its first payment.
 const findOpenRental = createServerOnlyFn(async (userId: string): Promise<Rental | undefined> => {

@@ -16,6 +16,8 @@ import { Route as StorefrontAgentsRouteImport } from './routes/_storefront/agent
 import { Route as CheckoutIndexRouteImport } from './routes/checkout/index'
 import { Route as CheckoutApprovedRouteImport } from './routes/checkout/approved'
 import { Route as CheckoutCancelledRouteImport } from './routes/checkout/cancelled'
+import { Route as StorefrontRentalsIndexRouteImport } from './routes/_storefront/rentals/index'
+import { Route as StorefrontRentalsNumberRouteImport } from './routes/_storefront/rentals/$number'
 
 const StorefrontRoute = StorefrontRouteImport.update({
   id: '/_storefront',
@@ -51,6 +53,16 @@ const CheckoutCancelledRoute = CheckoutCancelledRouteImport.update({
   path: '/cancelled',
   getParentRoute: () => CheckoutRouteRoute,
 } as any)
+const StorefrontRentalsIndexRoute = StorefrontRentalsIndexRouteImport.update({
+  id: '/rentals/',
+  path: '/rentals/',
+  getParentRoute: () => StorefrontRoute,
+} as any)
+const StorefrontRentalsNumberRoute = StorefrontRentalsNumberRouteImport.update({
+  id: '/rentals/$number',
+  path: '/rentals/$number',
+  getParentRoute: () => StorefrontRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/checkout': typeof CheckoutRouteRouteWithChildren
@@ -59,6 +71,8 @@ export interface FileRoutesByFullPath {
   '/checkout/approved': typeof CheckoutApprovedRoute
   '/checkout/cancelled': typeof CheckoutCancelledRoute
   '/checkout/': typeof CheckoutIndexRoute
+  '/rentals/$number': typeof StorefrontRentalsNumberRoute
+  '/rentals/': typeof StorefrontRentalsIndexRoute
 }
 export interface FileRoutesByTo {
   '/agents': typeof StorefrontAgentsRoute
@@ -66,6 +80,8 @@ export interface FileRoutesByTo {
   '/checkout/cancelled': typeof CheckoutCancelledRoute
   '/': typeof StorefrontIndexRoute
   '/checkout': typeof CheckoutIndexRoute
+  '/rentals/$number': typeof StorefrontRentalsNumberRoute
+  '/rentals': typeof StorefrontRentalsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -76,6 +92,8 @@ export interface FileRoutesById {
   '/checkout/cancelled': typeof CheckoutCancelledRoute
   '/_storefront/': typeof StorefrontIndexRoute
   '/checkout/': typeof CheckoutIndexRoute
+  '/_storefront/rentals/$number': typeof StorefrontRentalsNumberRoute
+  '/_storefront/rentals/': typeof StorefrontRentalsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -86,9 +104,17 @@ export interface FileRouteTypes {
     | '/checkout/approved'
     | '/checkout/cancelled'
     | '/checkout/'
+    | '/rentals/$number'
+    | '/rentals/'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/agents' | '/checkout/approved' | '/checkout/cancelled' | '/' | '/checkout'
+    | '/agents'
+    | '/checkout/approved'
+    | '/checkout/cancelled'
+    | '/'
+    | '/checkout'
+    | '/rentals/$number'
+    | '/rentals'
   id:
     | '__root__'
     | '/checkout'
@@ -98,6 +124,8 @@ export interface FileRouteTypes {
     | '/checkout/cancelled'
     | '/_storefront/'
     | '/checkout/'
+    | '/_storefront/rentals/$number'
+    | '/_storefront/rentals/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -156,6 +184,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CheckoutCancelledRouteImport
       parentRoute: typeof CheckoutRouteRoute
     }
+    '/_storefront/rentals/': {
+      id: '/_storefront/rentals/'
+      path: '/rentals'
+      fullPath: '/rentals/'
+      preLoaderRoute: typeof StorefrontRentalsIndexRouteImport
+      parentRoute: typeof StorefrontRoute
+    }
+    '/_storefront/rentals/$number': {
+      id: '/_storefront/rentals/$number'
+      path: '/rentals/$number'
+      fullPath: '/rentals/$number'
+      preLoaderRoute: typeof StorefrontRentalsNumberRouteImport
+      parentRoute: typeof StorefrontRoute
+    }
   }
 }
 
@@ -178,11 +220,15 @@ const CheckoutRouteRouteWithChildren = CheckoutRouteRoute._addFileChildren(
 interface StorefrontRouteChildren {
   StorefrontAgentsRoute: typeof StorefrontAgentsRoute
   StorefrontIndexRoute: typeof StorefrontIndexRoute
+  StorefrontRentalsNumberRoute: typeof StorefrontRentalsNumberRoute
+  StorefrontRentalsIndexRoute: typeof StorefrontRentalsIndexRoute
 }
 
 const StorefrontRouteChildren: StorefrontRouteChildren = {
   StorefrontAgentsRoute: StorefrontAgentsRoute,
   StorefrontIndexRoute: StorefrontIndexRoute,
+  StorefrontRentalsNumberRoute: StorefrontRentalsNumberRoute,
+  StorefrontRentalsIndexRoute: StorefrontRentalsIndexRoute,
 }
 
 const StorefrontRouteWithChildren = StorefrontRoute._addFileChildren(

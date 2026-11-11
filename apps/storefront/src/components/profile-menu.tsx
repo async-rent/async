@@ -6,16 +6,18 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuLinkItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@async-rent/ui/components/dropdown-menu";
 import { useClerk, useUser } from "@clerk/tanstack-react-start";
-import { RiLogoutBoxRLine, RiSettings3Line, RiUser3Line } from "@remixicon/react";
+import { RiFileList3Line, RiLogoutBoxRLine, RiSettings3Line, RiUser3Line } from "@remixicon/react";
+import { Link } from "@tanstack/react-router";
 
 /**
  * The signed-in visitor's account menu, in place of Clerk's stock UserButton.
  * Profile settings and sign-out still go through Clerk; Async's own entries
- * (My rentals, Operations) join the account group as they ship.
+ * (My rentals, then Operations) sit in the account group.
  */
 export function ProfileMenu() {
   const clerk = useClerk();
@@ -45,6 +47,10 @@ export function ProfileMenu() {
               {email && email !== name && <span className="truncate">{email}</span>}
             </DropdownMenuLabel>
           )}
+          <DropdownMenuLinkItem render={<Link to="/rentals" />}>
+            <RiFileList3Line />
+            My rentals
+          </DropdownMenuLinkItem>
           <DropdownMenuItem onClick={() => clerk.openUserProfile()}>
             <RiSettings3Line />
             Profile settings

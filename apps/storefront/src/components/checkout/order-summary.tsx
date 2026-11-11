@@ -131,10 +131,12 @@ interface OrderDetailsProps {
   order: OrderView;
   /** The id of the card's heading, for the landmark it sits in to point at. */
   titleId: string;
+  /** The card's heading. */
+  title?: string;
 }
 
 /** The top of an order card: where and when it arrives, what is in it and what each part costs. */
-export function OrderDetails({ order, titleId }: OrderDetailsProps) {
+export function OrderDetails({ order, titleId, title = "Your order" }: OrderDetailsProps) {
   const { locations } = useRentalPlan();
   // A placed order keeps its own city and day, whatever the plan says now.
   const location = locations.find((candidate) => candidate.id === order.locationId);
@@ -147,7 +149,7 @@ export function OrderDetails({ order, titleId }: OrderDetailsProps) {
     <>
       <div className="flex items-center justify-between gap-4">
         <h2 id={titleId} className={eyebrow}>
-          Your order
+          {title}
         </h2>
         <p className={cn(eyebrow, "text-muted-foreground")}>
           {units === 1 ? "1 item" : `${units} items`}
