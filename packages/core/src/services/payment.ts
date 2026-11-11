@@ -33,11 +33,30 @@ export const getProviderOrderInputSchema = z.object({
 
 export type GetProviderOrderInput = z.infer<typeof getProviderOrderInputSchema>;
 
-export const refundProviderPaymentInputSchema = z.object({
-  externalPaymentId: z
-    .string()
-    .describe("Provider-side payment to return, in full or for whatever it has left."),
-});
+export const refundProviderPaymentInputSchema = z
+  .object({
+    externalPaymentId: z.string().describe("Provider-side payment to return money from."),
+    amount: amountSchema
+      .positive()
+      .optional()
+      .describe(
+        "How much to return, in the currency's minor unit. Omit it to return whatever the payment has left.",
+      ),
+    currency: currencyCodeSchema
+      .optional()
+      .describe("Currency of `amount`, the payment's own. Required with an amount."),
+    requestKey: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Sending the same key again replays the first refund instead of refunding twice, for as long as the provider keeps the key. Without one, the adapter derives a key from the refund itself.",
+      ),
+  })
+  .refine((input) => input.amount === undefined || input.currency !== undefined, {
+    message: "A partial refund needs the payment's currency",
+    path: ["currency"],
+  });
 
 export type RefundProviderPaymentInput = z.infer<typeof refundProviderPaymentInputSchema>;
 
@@ -63,9 +82,10 @@ export const providerErrorCodeSchema = z
     "provider_response_invalid",
     "payment_pending",
     "order_not_approved",
+    "refund_exceeds_payment",
   ])
   .describe(
-    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, it has not settled the capture or refund yet, or the customer has not approved the order yet so there is nothing to capture.",
+    "Why a provider call failed: the input broke the contract, the provider could not be reached, it refused the request, it answered in a shape the adapter does not know, it has not settled the capture or refund yet, the customer has not approved the order yet so there is nothing to capture, or a partial refund asks for more than the payment has left.",
   );
 
 export type ProviderErrorCode = z.infer<typeof providerErrorCodeSchema>;
@@ -182,9 +202,15 @@ export interface PaymentProviderAdapter {
   getOrder(input: GetProviderOrderInput): Promise<GetProviderOrderResult>;
 
   /**
-   * Returns what is left of a settled charge to the customer: all of it,
-   * less anything already refunded at the provider. It takes no amount, since
-   * the provider knows what the charge has left.
+   * Returns money from a settled charge to the customer. Without an amount it
+   * returns what the charge has left: all of it, less anything already
+   * refunded at the provider. With one it returns that much, and fails with
+   * `refund_exceeds_payment` when the charge has less left. Repeating a call
+   * with the same `requestKey` replays the first refund's outcome, so a retry
+   * never refunds twice, but only while the provider keeps the key (6 hours at
+   * PayPal). A full refund is safe to repeat at any time, since the provider
+   * refuses to refund a charge with nothing left. A partial one repeated
+   * later is a new refund.
    */
   refund(input: RefundProviderPaymentInput): Promise<RefundProviderPaymentResult>;
 
@@ -230,7 +256,20 @@ export const confirmPaymentInputSchema = z.object({
 export type ConfirmPaymentInput = z.infer<typeof confirmPaymentInputSchema>;
 
 export const refundPaymentInputSchema = z.object({
-  paymentId: z.string().describe("Settled payment to refund in full."),
+  paymentId: z.string().describe("Settled payment to refund."),
+  amount: amountSchema
+    .positive()
+    .optional()
+    .describe(
+      "How much to return, in the payment's currency's minor unit, e.g. the Deposit. Omit it to refund the payment in full. A partial refund leaves the payment succeeded.",
+    ),
+  requestKey: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Stable key for this refund, e.g. one per Deposit refund. Retrying with the same key never refunds twice.",
+    ),
 });
 
 export type RefundPaymentInput = z.infer<typeof refundPaymentInputSchema>;
@@ -316,6 +355,8 @@ const refundPaymentResult = createResult(
   z.enum([
     "payment_not_found",
     "payment_not_refundable",
+    "refund_amount_invalid",
+    "refund_exceeds_payment",
     "refund_pending",
     "provider_not_configured",
     "provider_request_failed",
@@ -843,9 +884,23 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     return ok(payment);
   }
 
-  /** Returns a succeeded payment to the customer in full. */
+  /**
+   * Returns a succeeded payment to the customer: in full without an amount,
+   * or that much with one. A partial refund leaves the payment succeeded,
+   * since what it paid for was still paid; one that returns the whole amount
+   * refunds it. An amount above what the payment took is rejected here, and
+   * one above what the provider says it has left (after earlier partial
+   * refunds) fails with `refund_exceeds_payment` too. Retrying with the same
+   * `requestKey` replays the provider's first refund, so it never pays twice
+   * while the provider keeps the key; see `PaymentProviderAdapter.refund`.
+   */
   async function refundPayment(input: RefundPaymentInput): Promise<RefundPaymentResult> {
     const { ok, err } = refundPaymentResult;
+
+    const { amount, requestKey } = input;
+    if (amount !== undefined && !(Number.isSafeInteger(amount) && amount > 0)) {
+      return err("refund_amount_invalid", `Cannot refund ${amount}: give a positive whole amount`);
+    }
 
     const rows = await attempt(
       db.select().from(payments).where(eq(payments.id, input.paymentId)).limit(1),
@@ -857,19 +912,49 @@ export function createPaymentService({ db, providers }: CreatePaymentServiceOpti
     if (row.status !== "succeeded" || !row.externalPaymentId) {
       return err("payment_not_refundable", `Payment ${row.id} is ${row.status}`);
     }
+    if (amount !== undefined && amount > row.amount) {
+      return err(
+        "refund_exceeds_payment",
+        `Cannot refund ${amount} of payment ${row.id}, which took ${row.amount}`,
+      );
+    }
 
     const adapter = providers[row.provider];
     if (!adapter) {
       return err("provider_not_configured", `Provider ${row.provider} is not configured`);
     }
 
-    const refunded = await adapter.refund({ externalPaymentId: row.externalPaymentId });
+    const refunded = await adapter.refund({
+      externalPaymentId: row.externalPaymentId,
+      ...(amount === undefined ? {} : { amount, currency: row.currency }),
+      ...(requestKey === undefined ? {} : { requestKey }),
+    });
     if (!refunded.success) {
       // A refund the provider has not settled leaves the payment paid; asking
       // again reads where it stands without refunding twice.
-      return refunded.error.code === "payment_pending"
-        ? err("refund_pending", `Refund of payment ${row.id} is still processing`, refunded.error)
-        : err("provider_request_failed", "The payment provider failed", refunded.error);
+      switch (refunded.error.code) {
+        case "payment_pending":
+          return err(
+            "refund_pending",
+            `Refund of payment ${row.id} is still processing`,
+            refunded.error,
+          );
+        case "refund_exceeds_payment":
+          return err(
+            "refund_exceeds_payment",
+            `Payment ${row.id} has less left to refund than was asked for`,
+            refunded.error,
+          );
+        default:
+          return err("provider_request_failed", "The payment provider failed", refunded.error);
+      }
+    }
+
+    // Part of the money is back, but the payment still paid for its week.
+    if (amount !== undefined && amount < row.amount) {
+      const payment = parsePayment(row);
+
+      return payment ? ok(payment) : err("payment_data_invalid", `Payment ${row.id} is invalid`);
     }
 
     const now = new Date();

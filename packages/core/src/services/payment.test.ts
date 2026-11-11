@@ -744,6 +744,102 @@ describe("refundPayment", () => {
     expect(result).toMatchObject({ success: false, error: { code: "refund_pending" } });
     expect(retry).toMatchObject({ success: true, data: { status: "refunded" } });
   });
+
+  it("returns part of a paid charge and leaves it paid", async () => {
+    const s = setup();
+    const paymentId = await pay(s);
+
+    const result = await s.service.refundPayment({
+      paymentId,
+      amount: 24000,
+      requestKey: "deposit-rental_1",
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: { id: paymentId, status: "succeeded", amount: 37000 },
+    });
+    expect(s.refund).toHaveBeenCalledWith({
+      externalPaymentId: "capture_order_1",
+      amount: 24000,
+      currency: "USD",
+      requestKey: "deposit-rental_1",
+    });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
+  it("repeats a partial refund under the same request key, so the provider pays it once", async () => {
+    const s = setup();
+    const paymentId = await pay(s);
+    const partial = { paymentId, amount: 24000, requestKey: "deposit-rental_1" };
+    s.refund.mockResolvedValueOnce(
+      refundProviderPaymentResult.err("provider_unreachable", "provider down"),
+    );
+
+    const result = await s.service.refundPayment(partial);
+    const retry = await s.service.refundPayment(partial);
+
+    expect(result).toMatchObject({ success: false, error: { code: "provider_request_failed" } });
+    expect(retry).toMatchObject({ success: true, data: { status: "succeeded" } });
+    expect(s.refund.mock.calls.map(([input]) => input.requestKey)).toEqual([
+      "deposit-rental_1",
+      "deposit-rental_1",
+    ]);
+  });
+
+  it("marks the payment refunded when a partial refund returns all of it", async () => {
+    const s = setup();
+    const paymentId = await pay(s);
+
+    const result = await s.service.refundPayment({ paymentId, amount: 37000 });
+
+    expect(result).toMatchObject({ success: true, data: { status: "refunded" } });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "refunded" });
+  });
+
+  it("rejects an amount above what the payment took, without asking the provider", async () => {
+    const s = setup();
+    const paymentId = await pay(s);
+
+    const result = await s.service.refundPayment({ paymentId, amount: 37001 });
+
+    expect(result).toMatchObject({ success: false, error: { code: "refund_exceeds_payment" } });
+    expect(s.refund).not.toHaveBeenCalled();
+  });
+
+  it("rejects an amount above what the provider says the payment has left", async () => {
+    const s = setup();
+    const paymentId = await pay(s);
+    s.refund.mockResolvedValueOnce(
+      refundProviderPaymentResult.err("refund_exceeds_payment", "already partly refunded"),
+    );
+
+    const result = await s.service.refundPayment({ paymentId, amount: 24000 });
+
+    expect(result).toMatchObject({ success: false, error: { code: "refund_exceeds_payment" } });
+    expect(s.rentalRow("rental_1")).toEqual({ status: "confirmed", paymentStatus: "succeeded" });
+  });
+
+  it.each([0, -100, 12.5])("rejects a refund of %s", async (amount) => {
+    const s = setup();
+    const paymentId = await pay(s);
+
+    const result = await s.service.refundPayment({ paymentId, amount });
+
+    expect(result).toMatchObject({ success: false, error: { code: "refund_amount_invalid" } });
+    expect(s.refund).not.toHaveBeenCalled();
+  });
+
+  it("refuses a partial refund of a payment already refunded in full", async () => {
+    const s = setup();
+    const paymentId = await pay(s);
+    await s.service.refundPayment({ paymentId });
+
+    const result = await s.service.refundPayment({ paymentId, amount: 24000 });
+
+    expect(result).toMatchObject({ success: false, error: { code: "payment_not_refundable" } });
+    expect(s.refund).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("listPayments", () => {

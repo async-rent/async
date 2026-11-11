@@ -563,6 +563,85 @@ describe("refund", () => {
     expect(sent.headers.get("PayPal-Request-Id")).toBe("refund-CAPTURE1");
   });
 
+  it("returns part of the capture, keyed on the caller's request key", async () => {
+    const paypal = stubPayPal({
+      [refundPath]: { status: 201, body: { id: "REFUND1", status: "COMPLETED" } },
+    });
+
+    const result = await paypal.adapter.refund({
+      ...input,
+      amount: 24000,
+      currency: "USD",
+      requestKey: "deposit-rental_1",
+    });
+
+    expect(result).toEqual({ success: true });
+
+    const sent = paypal.sentTo(refundPath);
+    expect(sent.body).toEqual({ amount: { currency_code: "USD", value: "240.00" } });
+    expect(sent.headers.get("PayPal-Request-Id")).toBe("deposit-rental_1");
+  });
+
+  it("sends a repeated partial refund with the same key, so PayPal replays it", async () => {
+    const paypal = stubPayPal({
+      [refundPath]: { status: 201, body: { id: "REFUND1", status: "COMPLETED" } },
+    });
+    const partial = { ...input, amount: 24000, currency: "USD", requestKey: "deposit-rental_1" };
+
+    await paypal.adapter.refund(partial);
+    await paypal.adapter.refund(partial);
+
+    const keys = paypal.fetch.mock.calls
+      .filter(([url]) => url === `${sandbox}${refundPath}`)
+      .map(([, init]) => new Headers(init.headers).get("PayPal-Request-Id"));
+    expect(keys).toEqual(["deposit-rental_1", "deposit-rental_1"]);
+  });
+
+  it("keys a partial refund without a request key on the capture and amount", async () => {
+    const paypal = stubPayPal({
+      [refundPath]: { status: 201, body: { id: "REFUND1", status: "COMPLETED" } },
+    });
+
+    await paypal.adapter.refund({ ...input, amount: 24000, currency: "USD" });
+
+    // Never the full refund's key, which would replay this partial one.
+    expect(paypal.sentTo(refundPath).headers.get("PayPal-Request-Id")).toBe(
+      "refund-CAPTURE1-24000",
+    );
+  });
+
+  it("refunds in full under the caller's request key when one is given", async () => {
+    const paypal = stubPayPal({
+      [refundPath]: { status: 201, body: { id: "REFUND1", status: "COMPLETED" } },
+    });
+
+    await paypal.adapter.refund({ ...input, requestKey: "cancel-rental_1" });
+
+    const sent = paypal.sentTo(refundPath);
+    expect(sent.body).toEqual({});
+    expect(sent.headers.get("PayPal-Request-Id")).toBe("cancel-rental_1");
+  });
+
+  it("rejects an amount without its currency before calling PayPal", async () => {
+    const paypal = stubPayPal({});
+
+    const result = await paypal.adapter.refund({ ...input, amount: 24000 });
+
+    expect(result).toMatchObject({ success: false, error: { code: "invalid_request" } });
+    expect(paypal.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["REFUND_AMOUNT_EXCEEDED", "CAPTURE_FULLY_REFUNDED"])(
+    "fails a partial refund for more than the capture has left (%s)",
+    async (issue) => {
+      const paypal = stubPayPal({ [refundPath]: paypalError(422, issue) });
+
+      const result = await paypal.adapter.refund({ ...input, amount: 24000, currency: "USD" });
+
+      expect(result).toMatchObject({ success: false, error: { code: "refund_exceeds_payment" } });
+    },
+  );
+
   it("fails while a refund is pending, so the payment stays paid until it settles", async () => {
     const paypal = stubPayPal({
       [refundPath]: {
