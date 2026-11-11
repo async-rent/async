@@ -114,8 +114,16 @@ function EmailUs() {
   );
 }
 
-/** Reopens PayPal for an order still waiting for its first payment. */
-function PaymentRetry({ number }: { number: string }) {
+interface PayWithPayPalProps {
+  number: string;
+  /** The button's label while it waits for a click. */
+  label: string;
+  /** More actions beside the button. */
+  children?: ReactNode;
+}
+
+/** Opens PayPal for an order still waiting for its first payment, as checkout does. */
+export function PayWithPayPal({ number, label, children }: PayWithPayPalProps) {
   const checkout = useCheckout(number);
 
   return (
@@ -135,12 +143,21 @@ function PaymentRetry({ number }: { number: string }) {
           onClick={() => checkout.submit(undefined)}
         >
           {checkout.isSubmitting && <Spinner data-icon="inline-start" />}
-          {checkout.isSubmitting ? "Opening PayPal…" : "Try PayPal again"}
+          {checkout.isSubmitting ? "Opening PayPal…" : label}
           {!checkout.isSubmitting && <RiArrowRightLine data-icon="inline-end" />}
         </Button>
-        <EmailUs />
+        {children}
       </div>
     </>
+  );
+}
+
+/** Reopens PayPal for an order still waiting for its first payment. */
+function PaymentRetry({ number }: { number: string }) {
+  return (
+    <PayWithPayPal number={number} label="Try PayPal again">
+      <EmailUs />
+    </PayWithPayPal>
   );
 }
 
@@ -243,9 +260,19 @@ export function PaidConfirmation({ order }: { order: PaidOrder }) {
       }
       actions={
         <div className="flex flex-wrap gap-3">
-          <Link to="/" className={buttonVariants({ size: "lg", className: "px-4" })}>
-            Back to the shop
+          <Link
+            to="/rentals/$number"
+            params={{ number: order.number }}
+            className={buttonVariants({ size: "lg", className: "px-4" })}
+          >
+            See your rental
             <RiArrowRightLine data-icon="inline-end" />
+          </Link>
+          <Link
+            to="/"
+            className={buttonVariants({ variant: "outline", size: "lg", className: "px-4" })}
+          >
+            Back to the shop
           </Link>
         </div>
       }

@@ -238,7 +238,7 @@ function RentalLength() {
         >
           Rental length
         </p>
-        <p className="text-[10.5px] text-muted-foreground">Cancel or swap after week one</p>
+        <p className="text-[10.5px] text-muted-foreground">Cancel before delivery, end anytime</p>
       </div>
       <ToggleGroup
         aria-labelledby="rental-length"
