@@ -18,7 +18,7 @@
     "hooks": "@async-rent/ui/hooks",
     "utils": "cn"
   },
-  "menuColor": "default-translucent",
+  "menuColor": "default",
   "menuAccent": "subtle",
   "registries": {}
 }
